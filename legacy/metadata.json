@@ -1,0 +1,5 @@
+{
+  "name": "HanuiCast",
+  "description": "A mobile-first dashboard for Oriental Medicine doctors to listen to the latest research summaries using AI-generated audio.",
+  "requestFramePermissions": []
+}
