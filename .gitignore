@@ -25,10 +25,14 @@
 *.pem
 
 # debug
+api-debug.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# docs
+*.pdf
 
 # env files (can opt-in for committing if needed)
 .env*

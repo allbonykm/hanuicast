@@ -27,8 +27,14 @@ export default function Home() {
     const [searchQuery, setSearchQuery] = useState('');
     const [interestKeywords, setInterestKeywords] = useState<string[]>([]);
     const [isInitialLoading, setIsInitialLoading] = useState(true);
+    const [isMounted, setIsMounted] = useState(false);
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    // Prevent hydration mismatch
+    useEffect(() => {
+        setIsMounted(true);
+    }, []);
 
     // Initial load: keywords from Supabase
     useEffect(() => {
@@ -82,7 +88,7 @@ export default function Home() {
             }
             // Sort by date (desc) to show latest first
             allPapers.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            setPapers(allPapers.slice(0, 10)); // Top 10 latest
+            setPapers(allPapers.slice(0, 20)); // Top 20 latest
         } catch (err) {
             console.error('Curation Error:', err);
         } finally {
@@ -226,10 +232,21 @@ export default function Home() {
         }
     };
 
+    // Prevent hydration mismatch by only rendering after mount
+    if (!isMounted) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-slate-500">Loading...</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div
             className="min-h-screen bg-slate-50 flex flex-col max-w-lg mx-auto shadow-2xl overflow-hidden font-sans"
-            suppressHydrationWarning={true}
         >
             {/* Header */}
             <header className="bg-white/80 backdrop-blur-md p-6 sticky top-0 z-10 border-b border-slate-100">
@@ -295,7 +312,7 @@ export default function Home() {
                             [1, 2].map(i => (
                                 <div key={i} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 animate-pulse h-48"></div>
                             ))
-                        ) : (
+                        ) : papers.length > 0 ? (
                             papers.map((paper) => (
                                 <motion.div
                                     key={paper.id}
@@ -304,9 +321,14 @@ export default function Home() {
                                     onClick={() => startPodcast(paper)}
                                 >
                                     <div className="flex justify-between items-start mb-4">
-                                        <span className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold uppercase tracking-wide">
-                                            {paper.journal}
-                                        </span>
+                                        <div className="flex gap-2">
+                                            <span className={`px-2 py-1 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : 'bg-blue-600'}`}>
+                                                {paper.id.startsWith('kci_') ? 'KCI' : 'PubMed'}
+                                            </span>
+                                            <span className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold uppercase tracking-wide">
+                                                {paper.journal}
+                                            </span>
+                                        </div>
                                         <Heart size={18} className="text-slate-200 hover:text-red-400 cursor-pointer transition-colors" />
                                     </div>
                                     <h3 className="text-lg font-bold text-slate-800 leading-tight mb-2 line-clamp-2">
@@ -326,6 +348,11 @@ export default function Home() {
                                     </div>
                                 </motion.div>
                             ))
+                        ) : (
+                            <div className="text-center py-10 text-slate-400">
+                                <p>검색 결과가 없습니다.</p>
+                                {searchQuery && <p className="text-sm mt-2">"{searchQuery}"에 대한 결과를 찾지 못했습니다.</p>}
+                            </div>
                         )}
                     </div>
                 </section>
