@@ -21,13 +21,17 @@ export interface Paper {
     tags: string[];
     originalUrl: string;
     source: 'PubMed' | 'KCI';
+    type?: string; // e.g. 'Case Report', 'Review', 'Clinical Trial'
 }
+
+export type SearchMode = 'clinical' | 'evidence' | 'latest' | 'general';
 
 export interface SearchOptions {
     maxResults?: number;
     sort?: 'date' | 'relevance';
     minDate?: string;  // YYYY/MM/DD
     maxDate?: string;
+    mode?: SearchMode;
 }
 
 const DEFAULT_OPTIONS: SearchOptions = {
@@ -113,7 +117,18 @@ export async function fetchPubmedPapers(
 
     try {
         // Step 1: ESearch - get IDs
-        let searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(query)}&retmode=json&retmax=${opts.maxResults}${apiKey}`;
+        let searchTerms = query;
+
+        // Apply mode-specific PubMed filters ([pt] = Publication Type)
+        if (opts.mode === 'evidence') {
+            searchTerms += ' AND ("meta-analysis"[pt] OR "systematic review"[pt])';
+        } else if (opts.mode === 'clinical') {
+            searchTerms += ' AND ("case reports"[pt] OR "clinical trial"[pt] OR "meta-analysis"[pt] OR "systematic review"[pt])';
+        } else if (opts.mode === 'latest') {
+            // Handled by date filters usually, but can add priority
+        }
+
+        let searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(searchTerms)}&retmode=json&retmax=${opts.maxResults}${apiKey}`;
 
         if (opts.sort === 'date') {
             searchUrl += '&sort=pub_date';
@@ -191,12 +206,25 @@ export async function fetchPubmedPapers(
                     abstractText = Array.isArray(abs) ? abs.map((t: any) => typeof t === 'string' ? t : t['#text']).join(' ') : (typeof abs === 'string' ? abs : abs['#text']);
                 }
 
+                // Publication Type
+                let type = 'Journal Article';
+                if (article.PublicationTypeList?.PublicationType) {
+                    const pts = Array.isArray(article.PublicationTypeList.PublicationType)
+                        ? article.PublicationTypeList.PublicationType
+                        : [article.PublicationTypeList.PublicationType];
+                    // Pick the most relevant one
+                    const priorityTypes = ['Meta-Analysis', 'Systematic Review', 'Clinical Trial', 'Case Reports', 'Review'];
+                    const found = pts.map((pt: any) => typeof pt === 'string' ? pt : pt['#text']).find((pt: string) => priorityTypes.includes(pt));
+                    type = found || (typeof pts[0] === 'string' ? pts[0] : pts[0]['#text']);
+                }
+
                 const item = {
                     title: article.ArticleTitle || 'Untitled',
                     authors: authorStr,
                     fulljournalname: article.Journal?.Title || 'Unknown Journal',
                     pubdate: dateStr,
-                    abstract: abstractText
+                    abstract: abstractText,
+                    type: type
                 };
 
                 return { id, data: item };
@@ -236,7 +264,8 @@ export async function fetchPubmedPapers(
                 abstract: item.abstract || `[PubMed ID: ${res.id}] Abstract not available.`,
                 tags: ['PubMed'],
                 originalUrl: `https://pubmed.ncbi.nlm.nih.gov/${res.id}/`,
-                source: 'PubMed' as const
+                source: 'PubMed' as const,
+                type: item.type
             };
         });
 
@@ -255,7 +284,7 @@ export async function fetchPubmedPapers(
             logToFile(`[PubMed] Returning initial IDs as search failed mid-way.`);
             return ids.map((id: string) => ({
                 id: `pubmed_${id}`,
-                title: `PubMed Artice (ID: ${id})`,
+                title: `PubMed Article (ID: ${id})`,
                 authors: 'Details unavailable',
                 journal: 'PubMed',
                 date: 'Unknown',
@@ -348,7 +377,8 @@ export async function fetchKciPapers(
 
             const articleId = articleInfo['@_article-id'] || record.articleId || record.id || Math.random().toString(36).substring(7);
             const titleGroup = articleInfo['title-group'] || {};
-            const title = getText(titleGroup['article-title'] || record.title || 'Untitled');
+            let title = getText(titleGroup['article-title'] || record.title || 'Untitled');
+            title = title.replace(/회전근\s+개/g, '회전근개');
 
             let authors = 'Unknown Authors';
             const authorGroup = articleInfo['author-group'];
@@ -369,6 +399,15 @@ export async function fetchKciPapers(
                 // Prefer Korean
                 const korAbs = absList.find((a: any) => a['@_lang'] === 'original' || a['@_lang'] === 'korean');
                 abstract = getText(korAbs || absList[0]);
+                abstract = abstract.replace(/회전근\s+개/g, '회전근개');
+            }
+
+            // Determine KCI Type (Simplified mapping)
+            let type = 'Journal Article';
+            if (articleInfo['article-categories']?.['subj-group']?.['subject']) {
+                const sub = getText(articleInfo['article-categories']['subj-group']['subject']);
+                if (sub.includes('사례') || sub.includes('증례')) type = 'Case Report';
+                else if (sub.includes('리뷰') || sub.includes('검토')) type = 'Review';
             }
 
             return {
@@ -380,7 +419,8 @@ export async function fetchKciPapers(
                 abstract: abstract || `[KCI Article] Click to view details.`,
                 tags: ['KCI'],
                 originalUrl: `https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId=${articleId}`,
-                source: 'KCI' as const
+                source: 'KCI' as const,
+                type
             };
         });
 

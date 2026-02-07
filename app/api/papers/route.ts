@@ -9,6 +9,7 @@ export async function GET(req: Request) {
     const query = searchParams.get('q') || '';
     const limit = parseInt(searchParams.get('limit') || '10', 10);
     const sort = (searchParams.get('sort') as 'date' | 'relevance') || 'date';
+    const mode = (searchParams.get('mode') as any) || 'general';
 
     if (!query) {
         return NextResponse.json({ papers: [] });
@@ -16,7 +17,8 @@ export async function GET(req: Request) {
 
     const options: SearchOptions = {
         maxResults: Math.min(limit, 20),  // Cap at 20
-        sort
+        sort,
+        mode
     };
 
     // 1. Translate Korean query to English for PubMed
@@ -24,11 +26,17 @@ export async function GET(req: Request) {
     if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query)) {
         try {
             const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-            const prompt = `Translate the following Korean medical search term into a concise English phrase optimized for PubMed search. Output ONLY the English phrase: "${query}"`;
+
+            let modeContext = "";
+            if (mode === 'clinical') modeContext = " Focus on clinical trials, case reports, and experimental studies.";
+            if (mode === 'evidence') modeContext = " Focus on systematic reviews and meta-analyses.";
+
+            const prompt = `Translate the following Korean medical search term into a concise English phrase optimized for PubMed search.${modeContext} Output ONLY the English phrase: "${query}"`;
+
             const result = await model.generateContent(prompt);
             const response = await result.response;
-            englishQuery = response.text().trim();
-            console.log(`[Papers API] Translated "${query}" -> "${englishQuery}"`);
+            englishQuery = response.text().trim().replace(/[".]/g, ''); // Clean quotes and dots
+            console.log(`[Papers API] Mode: ${mode}, Translated "${query}" -> "${englishQuery}"`);
         } catch (err) {
             console.error('[Papers API] Translation error:', err);
         }

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 
@@ -14,9 +14,20 @@ interface Paper {
     abstract: string;
     tags: string[];
     originalUrl: string;
+    type?: string;
     audioUrl?: string;
     summaryScript?: string;
 }
+
+type SearchMode = 'clinical' | 'evidence' | 'latest' | 'general';
+
+// Helper function to format seconds to MM:SS
+const formatTime = (seconds: number): string => {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
 
 export default function Home() {
     const [papers, setPapers] = useState<Paper[]>([]);
@@ -25,16 +36,39 @@ export default function Home() {
     const [isPlaying, setIsPlaying] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [searchMode, setSearchMode] = useState<SearchMode>('general');
+    const [expandedPaperId, setExpandedPaperId] = useState<string | null>(null);
     const [interestKeywords, setInterestKeywords] = useState<string[]>([]);
     const [isInitialLoading, setIsInitialLoading] = useState(true);
     const [isMounted, setIsMounted] = useState(false);
+    const [showMiniPlayer, setShowMiniPlayer] = useState(false);
+    const [audioProgress, setAudioProgress] = useState({ currentTime: 0, duration: 0 });
 
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const inlinePlayerRef = useRef<HTMLDivElement | null>(null);
 
     // Prevent hydration mismatch
     useEffect(() => {
         setIsMounted(true);
     }, []);
+
+    // Intersection Observer for mini player
+    useEffect(() => {
+        if (!inlinePlayerRef.current || !currentPaper) {
+            setShowMiniPlayer(false);
+            return;
+        }
+
+        const observer = new IntersectionObserver(
+            ([entry]) => {
+                setShowMiniPlayer(!entry.isIntersecting && isPlaying);
+            },
+            { threshold: 0.1 }
+        );
+
+        observer.observe(inlinePlayerRef.current);
+        return () => observer.disconnect();
+    }, [currentPaper, isPlaying]);
 
     // Initial load: keywords from Supabase
     useEffect(() => {
@@ -75,7 +109,7 @@ export default function Home() {
             // Fetch papers for each keyword and merge
             const allPapers: Paper[] = [];
             for (const k of keywords) {
-                const res = await fetch(`/api/papers?q=${encodeURIComponent(k)}`);
+                const res = await fetch(`/api/papers?q=${encodeURIComponent(k)}&mode=${searchMode}`);
                 const data = await res.json();
                 if (data.papers) {
                     // Add only unique papers
@@ -97,10 +131,10 @@ export default function Home() {
         }
     };
 
-    const fetchPapers = async (q = '') => {
+    const fetchPapers = async (q = '', mode = searchMode) => {
         setLoading(true);
         try {
-            const res = await fetch(`/api/papers?q=${encodeURIComponent(q)}`);
+            const res = await fetch(`/api/papers?q=${encodeURIComponent(q)}&mode=${mode}`);
             const data = await res.json();
             setPapers(data.papers);
         } catch (err) {
@@ -143,7 +177,17 @@ export default function Home() {
         e.preventDefault();
         if (searchQuery.trim()) {
             addKeyword(searchQuery.trim());
-            fetchPapers(searchQuery);
+            fetchPapers(searchQuery, searchMode);
+        }
+    };
+
+    const handleModeChange = (mode: SearchMode) => {
+        setSearchMode(mode);
+        if (searchQuery.trim()) {
+            fetchPapers(searchQuery.trim(), mode);
+        } else if (interestKeywords.length > 0) {
+            // Re-fetch curation with new mode
+            fetchDailyCuration(interestKeywords);
         }
     };
 
@@ -252,8 +296,8 @@ export default function Home() {
             <header className="bg-white/80 backdrop-blur-md p-6 sticky top-0 z-10 border-b border-slate-100">
                 <div className="flex justify-between items-center mb-6">
                     <div>
-                        <h1 className="text-3xl font-black text-slate-900 tracking-tight">HanuiCast</h1>
-                        <p className="text-sm font-semibold text-blue-600 uppercase tracking-widest mt-1">Olbon Insight Assistant</p>
+                        <h1 className="text-3xl font-black text-slate-900 tracking-tight">Morning Article</h1>
+                        <p className="text-sm font-semibold text-blue-600 uppercase tracking-widest mt-1">Medical insight assistant</p>
                     </div>
                     <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3">
                         <Music size={24} />
@@ -293,6 +337,28 @@ export default function Home() {
                         <span className="text-xs text-slate-300 italic">키워드를 추가하여 맞춤 브리핑을 받으세요.</span>
                     )}
                 </div>
+
+                {/* Mode Selector */}
+                <div className="mt-6 flex flex-wrap gap-2">
+                    {[
+                        { id: 'general', label: '전격', icon: '🔍' },
+                        { id: 'clinical', label: '임상', icon: '🏥' },
+                        { id: 'evidence', label: '근거', icon: '📊' },
+                        { id: 'latest', label: '최신', icon: '🆕' }
+                    ].map((mode) => (
+                        <button
+                            key={mode.id}
+                            onClick={() => handleModeChange(mode.id as SearchMode)}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-bold whitespace-nowrap transition-all border-2 ${searchMode === mode.id
+                                ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200'
+                                : 'bg-slate-50 border-slate-100 text-slate-600 hover:border-slate-300'
+                                }`}
+                        >
+                            <span>{mode.icon}</span>
+                            {mode.label}
+                        </button>
+                    ))}
+                </div>
             </header>
 
             {/* Main Content */}
@@ -313,39 +379,201 @@ export default function Home() {
                                 <div key={i} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 animate-pulse h-48"></div>
                             ))
                         ) : papers.length > 0 ? (
-                            papers.map((paper) => (
+                            papers.map((paper: Paper) => (
                                 <motion.div
                                     key={paper.id}
-                                    whileHover={{ y: -4 }}
-                                    className={`bg-white rounded-3xl p-6 shadow-sm border-2 transition-all cursor-pointer ${currentPaper?.id === paper.id ? 'border-blue-500 ring-4 ring-blue-50' : 'border-slate-100 hover:border-slate-200 shadow-slate-200/50'}`}
-                                    onClick={() => startPodcast(paper)}
+                                    layout
+                                    className={`bg-white rounded-3xl overflow-hidden shadow-sm border-2 transition-all ${expandedPaperId === paper.id ? 'border-blue-500 ring-4 ring-blue-50' : 'border-slate-100 hover:border-slate-200'}`}
                                 >
-                                    <div className="flex justify-between items-start mb-4">
-                                        <div className="flex gap-2">
-                                            <span className={`px-2 py-1 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : 'bg-blue-600'}`}>
-                                                {paper.id.startsWith('kci_') ? 'KCI' : 'PubMed'}
-                                            </span>
-                                            <span className="px-3 py-1 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold uppercase tracking-wide">
-                                                {paper.journal}
-                                            </span>
+                                    {/* Main Card Area - Click Title to Expand */}
+                                    <div
+                                        className="p-6 cursor-pointer"
+                                        onClick={() => setExpandedPaperId(expandedPaperId === paper.id ? null : paper.id)}
+                                    >
+                                        <div className="flex justify-between items-start mb-3">
+                                            <div className="flex gap-2 flex-wrap">
+                                                <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : 'bg-blue-600'}`}>
+                                                    {paper.id.startsWith('kci_') ? 'KCI' : 'PubMed'}
+                                                </span>
+                                                {paper.type && (
+                                                    <span className="px-2 py-0.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase tracking-wider">
+                                                        {paper.type}
+                                                    </span>
+                                                )}
+                                                <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold uppercase tracking-tight">
+                                                    {paper.journal}
+                                                </span>
+                                            </div>
+                                            <Heart size={18} className="text-slate-200 hover:text-red-400 cursor-pointer transition-colors" />
                                         </div>
-                                        <Heart size={18} className="text-slate-200 hover:text-red-400 cursor-pointer transition-colors" />
+
+                                        <h3 className={`text-slate-900 leading-tight transition-all ${paper.id.startsWith('kci_') ? 'font-semibold' : 'font-bold'} ${expandedPaperId === paper.id ? 'text-2xl' : 'text-lg line-clamp-2'}`}>
+                                            {paper.title}
+                                        </h3>
+
+                                        {expandedPaperId !== paper.id && (
+                                            <div className="text-xs text-slate-400 mt-2 font-medium space-y-0.5">
+                                                {paper.authors.split(', ').slice(0, 3).map((author, idx) => (
+                                                    <p key={idx}>{author}</p>
+                                                ))}
+                                                {paper.authors.split(', ').length > 3 && (
+                                                    <p className="text-slate-300">외 {paper.authors.split(', ').length - 3}명</p>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
-                                    <h3 className="text-lg font-bold text-slate-800 leading-tight mb-2 line-clamp-2">
-                                        {paper.title}
-                                    </h3>
-                                    <p className="text-sm text-slate-500 font-medium mb-4 line-clamp-2 italic">
-                                        {paper.authors}
-                                    </p>
-                                    <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
-                                        {paper.tags.map(tag => (
-                                            <span key={tag} className="text-[10px] font-black text-slate-400 border border-slate-100 px-2 py-0.5 rounded-full whitespace-nowrap">#{tag}</span>
-                                        ))}
-                                    </div>
-                                    <div className="flex items-center gap-2 text-blue-600 font-bold text-sm bg-blue-50/50 w-fit px-4 py-2 rounded-xl group-hover:bg-blue-600 group-hover:text-white transition-all">
-                                        {currentPaper?.id === paper.id && isPlaying ? <Pause size={16} /> : <Play size={16} fill="currentColor" />}
-                                        <span>{currentPaper?.id === paper.id && isGenerating ? (statusMessage || '처리 중...') : '요약 오디오 듣기'}</span>
-                                    </div>
+
+                                    {/* Expandable Content */}
+                                    <AnimatePresence>
+                                        {expandedPaperId === paper.id && (
+                                            <motion.div
+                                                initial={{ height: 0, opacity: 0 }}
+                                                animate={{ height: 'auto', opacity: 1 }}
+                                                exit={{ height: 0, opacity: 0 }}
+                                                className="border-t border-slate-50 bg-slate-50/30"
+                                            >
+                                                <div className="p-6">
+                                                    <p className="text-sm text-slate-700 leading-relaxed mb-6 font-medium">
+                                                        {paper.abstract}
+                                                    </p>
+                                                    <div className="flex flex-wrap gap-2 mb-6">
+                                                        {paper.tags.map((tag: string) => (
+                                                            <span key={tag} className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 px-3 py-1 rounded-full">#{tag}</span>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* Audio Controls Section */}
+                                                    {currentPaper?.id === paper.id && currentPaper.audioUrl ? (
+                                                        <div ref={inlinePlayerRef} className="bg-slate-900 rounded-2xl p-5 mt-4">
+                                                            <div className="flex items-center justify-center gap-6 mb-4">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        if (audioRef.current) {
+                                                                            audioRef.current.currentTime = Math.max(0, audioRef.current.currentTime - 10);
+                                                                        }
+                                                                    }}
+                                                                    className="text-slate-400 hover:text-white transition-colors"
+                                                                >
+                                                                    <SkipBack fill="currentColor" size={24} />
+                                                                </button>
+
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        if (isPlaying) {
+                                                                            audioRef.current?.pause();
+                                                                            setIsPlaying(false);
+                                                                        } else {
+                                                                            audioRef.current?.play();
+                                                                            setIsPlaying(true);
+                                                                        }
+                                                                    }}
+                                                                    className="w-14 h-14 bg-blue-600 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition-all hover:bg-blue-500"
+                                                                >
+                                                                    {isPlaying ? (
+                                                                        <Pause fill="currentColor" size={24} className="text-white" />
+                                                                    ) : (
+                                                                        <Play fill="currentColor" size={24} className="text-white ml-1" />
+                                                                    )}
+                                                                </button>
+
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        if (audioRef.current) {
+                                                                            audioRef.current.currentTime = Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + 10);
+                                                                        }
+                                                                    }}
+                                                                    className="text-slate-400 hover:text-white transition-colors"
+                                                                >
+                                                                    <SkipForward fill="currentColor" size={24} />
+                                                                </button>
+                                                            </div>
+
+                                                            <div
+                                                                className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden cursor-pointer mb-2"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    if (audioRef.current && audioRef.current.duration) {
+                                                                        const rect = e.currentTarget.getBoundingClientRect();
+                                                                        const percent = (e.clientX - rect.left) / rect.width;
+                                                                        audioRef.current.currentTime = percent * audioRef.current.duration;
+                                                                    }
+                                                                }}
+                                                            >
+                                                                <div
+                                                                    className="h-full bg-blue-500 transition-all"
+                                                                    style={{ width: `${audioProgress.duration > 0 ? (audioProgress.currentTime / audioProgress.duration) * 100 : 0}%` }}
+                                                                />
+                                                            </div>
+                                                            <div className="flex justify-between text-[10px] text-slate-500 font-medium">
+                                                                <span>{formatTime(audioProgress.currentTime)}</span>
+                                                                <span>{formatTime(audioProgress.duration)}</span>
+                                                            </div>
+
+                                                            <a
+                                                                href={paper.originalUrl}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                className="block text-center text-xs text-blue-400 hover:text-blue-300 font-medium mt-3"
+                                                            >
+                                                                원문 보기 →
+                                                            </a>
+
+                                                            <audio
+                                                                ref={audioRef}
+                                                                src={currentPaper.audioUrl}
+                                                                onPlay={() => setIsPlaying(true)}
+                                                                onPause={() => setIsPlaying(false)}
+                                                                onEnded={() => setIsPlaying(false)}
+                                                                onTimeUpdate={(e) => {
+                                                                    const audio = e.currentTarget;
+                                                                    setAudioProgress({
+                                                                        currentTime: audio.currentTime,
+                                                                        duration: audio.duration || 0
+                                                                    });
+                                                                }}
+                                                                onLoadedMetadata={(e) => {
+                                                                    const duration = e.currentTarget?.duration;
+                                                                    if (duration && !isNaN(duration)) {
+                                                                        setAudioProgress(prev => ({
+                                                                            ...prev,
+                                                                            duration: duration
+                                                                        }));
+                                                                    }
+                                                                }}
+                                                                className="hidden"
+                                                                autoPlay
+                                                            />
+                                                        </div>
+                                                    ) : (
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                startPodcast(paper);
+                                                            }}
+                                                            disabled={currentPaper?.id === paper.id && isGenerating}
+                                                            className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:opacity-70"
+                                                        >
+                                                            {currentPaper?.id === paper.id && isGenerating ? (
+                                                                <>
+                                                                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                    {statusMessage || '분석 중...'}
+                                                                </>
+                                                            ) : (
+                                                                <>
+                                                                    <Play size={20} fill="currentColor" />
+                                                                    오디오 리포트 생성
+                                                                </>
+                                                            )}
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </motion.div>
+                                        )}
+                                    </AnimatePresence>
                                 </motion.div>
                             ))
                         ) : (
@@ -358,28 +586,19 @@ export default function Home() {
                 </section>
             </main>
 
-            {/* Audio Player Drawer */}
+            {/* Floating Mini Player - appears when inline player scrolls out of view */}
             <AnimatePresence>
-                {currentPaper && (
+                {showMiniPlayer && currentPaper && (
                     <motion.div
-                        initial={{ y: 100 }}
-                        animate={{ y: 0 }}
-                        exit={{ y: 100 }}
-                        className="bg-slate-900 text-white p-8 rounded-t-[40px] shadow-2xl border-t border-slate-800 z-50 sticky bottom-0"
+                        initial={{ y: 100, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: 100, opacity: 0 }}
+                        className="fixed bottom-0 left-0 right-0 bg-slate-900/95 backdrop-blur-md text-white px-4 py-3 z-50 border-t border-slate-700 max-w-lg mx-auto"
                     >
-                        <div className="w-12 h-1.5 bg-slate-700 rounded-full mx-auto mb-8 cursor-pointer hover:bg-slate-600" onClick={() => { }} />
-
-                        <div className="mb-8">
-                            <h4 className="text-xl font-black mb-1 line-clamp-1 text-center bg-gradient-to-r from-blue-400 to-indigo-400 bg-clip-text text-transparent">{currentPaper.title}</h4>
-                            <p className="text-sm text-slate-400 font-semibold text-center uppercase tracking-widest">{currentPaper.journal} • 브리핑 세션</p>
-                        </div>
-
-                        <div className="flex items-center justify-between mb-10 px-4">
-                            <button className="text-slate-400 hover:text-white transition-colors p-2"><SkipBack fill="currentColor" size={32} /></button>
-
+                        <div className="flex items-center gap-3">
+                            {/* Play/Pause */}
                             <button
                                 onClick={() => {
-                                    if (isGenerating) return;
                                     if (isPlaying) {
                                         audioRef.current?.pause();
                                         setIsPlaying(false);
@@ -388,48 +607,53 @@ export default function Home() {
                                         setIsPlaying(true);
                                     }
                                 }}
-                                disabled={isGenerating}
-                                className="w-24 h-24 bg-blue-600 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(37,99,235,0.4)] active:scale-95 transition-all hover:bg-blue-500 disabled:opacity-50 disabled:animate-pulse"
+                                className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center flex-shrink-0"
                             >
-                                {isGenerating ? (
-                                    <div className="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin" />
-                                ) : isPlaying ? (
-                                    <Pause fill="currentColor" size={40} />
+                                {isPlaying ? (
+                                    <Pause fill="currentColor" size={18} />
                                 ) : (
-                                    <Play fill="currentColor" size={40} className="ml-2" />
+                                    <Play fill="currentColor" size={18} className="ml-0.5" />
                                 )}
                             </button>
 
-                            <button className="text-slate-400 hover:text-white transition-colors p-2"><SkipForward fill="currentColor" size={32} /></button>
-                        </div>
-
-                        <div className="space-y-4 px-2">
-                            <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden">
-                                <motion.div
-                                    initial={{ width: 0 }}
-                                    animate={{ width: isPlaying ? '100%' : '0%' }}
-                                    transition={{ duration: 300, ease: 'linear' }}
-                                    className="h-full bg-blue-500"
-                                />
+                            {/* Title & Progress */}
+                            <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium line-clamp-1">{currentPaper.title}</p>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                    <span>{formatTime(audioProgress.currentTime)}</span>
+                                    <div className="flex-1 h-1 bg-slate-700 rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full bg-blue-500"
+                                            style={{ width: `${audioProgress.duration > 0 ? (audioProgress.currentTime / audioProgress.duration) * 100 : 0}%` }}
+                                        />
+                                    </div>
+                                    <span>{formatTime(audioProgress.duration)}</span>
+                                </div>
                             </div>
-                            <div className="flex justify-between text-[10px] font-bold text-slate-500 tracking-widest uppercase">
-                                <span>0:00</span>
-                                <span>COMMUTE MODE</span>
-                                <span>4:30</span>
-                            </div>
-                        </div>
 
-                        {currentPaper.audioUrl && (
-                            <audio
-                                ref={audioRef}
-                                src={currentPaper.audioUrl}
-                                onPlay={() => setIsPlaying(true)}
-                                onPause={() => setIsPlaying(false)}
-                                onEnded={() => setIsPlaying(false)}
-                                className="hidden"
-                                autoPlay
-                            />
-                        )}
+                            {/* Scroll to card button */}
+                            <button
+                                onClick={() => {
+                                    inlinePlayerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }}
+                                className="text-slate-400 hover:text-white transition-colors p-1"
+                                title="카드로 이동"
+                            >
+                                <ChevronUp size={20} />
+                            </button>
+
+                            {/* Close */}
+                            <button
+                                onClick={() => {
+                                    audioRef.current?.pause();
+                                    setCurrentPaper(null);
+                                    setIsPlaying(false);
+                                }}
+                                className="text-slate-400 hover:text-white transition-colors p-1"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
                     </motion.div>
                 )}
             </AnimatePresence>
