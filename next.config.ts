@@ -1,9 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   webpack: (config, { dev, isServer }) => {
     if (dev) {
       config.watchOptions = {
