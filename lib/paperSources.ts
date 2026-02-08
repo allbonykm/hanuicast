@@ -156,122 +156,95 @@ export async function fetchPubmedPapers(
         }
 
         // Step 2: EFetch - Fetch full details + Abstract (XML)
-        // ESummary is blocked/throttled, so we use EFetch which is verified to work
-        logToFile(`[PubMed] Fetching ${ids.length} details via EFetch (XML)...`);
+        // Switch to BATCH EFetch for efficiency and avoiding rate limits
+        logToFile(`[PubMed] Fetching ${ids.length} details via Batch EFetch (XML)...`);
 
-        const summaryPromises = ids.map(async (id) => {
-            try {
-                // Use EFetch with XML to get full metadata + abstract
-                // Note: rettype=abstract, retmode=xml gives the standard PubMed XML format
-                const individualUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${id}&rettype=abstract&retmode=xml${apiKey}`;
+        const batchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${ids.join(',')}&rettype=abstract&retmode=xml${apiKey}`;
+        const res = await fetchWithTimeout(batchUrl, 30000); // 30s for the whole batch
+        if (!res.ok) {
+            logToFile(`[PubMed] Batch EFetch failed: ${res.status}`);
+            throw new Error(`Batch EFetch failed with status ${res.status}`);
+        }
 
-                const res = await fetchWithTimeout(individualUrl, 20000); // 20s for full XML
-                if (!res.ok) return { id, data: null };
-
-                const xmlText = await res.text();
-                const parser = new XMLParser({
-                    ignoreAttributes: false,
-                    attributeNamePrefix: "@_"
-                });
-                const parsed = parser.parse(xmlText);
-
-                // PubMed XML structure navigation
-                // When fetching single ID, PubmedArticle is an object. If multiple, it's array.
-                // We are fetching individually here.
-                const articleSet = parsed.PubmedArticleSet;
-                const article = articleSet?.PubmedArticle?.MedlineCitation?.Article;
-
-                if (!article) return { id, data: null };
-
-                // Authors
-                let authorStr = 'Unknown Authors';
-                if (article.AuthorList?.Author) {
-                    const authors = Array.isArray(article.AuthorList.Author)
-                        ? article.AuthorList.Author
-                        : [article.AuthorList.Author];
-                    authorStr = authors.map((a: any) => `${a.LastName || ''} ${a.Initials || ''}`.trim()).join(', ');
-                }
-
-                // Date
-                let dateStr = 'Unknown Date';
-                const pubDate = article.Journal?.JournalIssue?.PubDate;
-                if (pubDate) {
-                    dateStr = `${pubDate.Year || ''} ${pubDate.Month || ''}`.trim();
-                }
-
-                // Abstract
-                let abstractText = 'No abstract available.';
-                if (article.Abstract?.AbstractText) {
-                    const abs = article.Abstract.AbstractText;
-                    abstractText = Array.isArray(abs) ? abs.map((t: any) => typeof t === 'string' ? t : t['#text']).join(' ') : (typeof abs === 'string' ? abs : abs['#text']);
-                }
-
-                // Publication Type
-                let type = 'Journal Article';
-                if (article.PublicationTypeList?.PublicationType) {
-                    const pts = Array.isArray(article.PublicationTypeList.PublicationType)
-                        ? article.PublicationTypeList.PublicationType
-                        : [article.PublicationTypeList.PublicationType];
-                    // Pick the most relevant one
-                    const priorityTypes = ['Meta-Analysis', 'Systematic Review', 'Clinical Trial', 'Case Reports', 'Review'];
-                    const found = pts.map((pt: any) => typeof pt === 'string' ? pt : pt['#text']).find((pt: string) => priorityTypes.includes(pt));
-                    type = found || (typeof pts[0] === 'string' ? pts[0] : pts[0]['#text']);
-                }
-
-                const item = {
-                    title: article.ArticleTitle || 'Untitled',
-                    authors: authorStr,
-                    fulljournalname: article.Journal?.Title || 'Unknown Journal',
-                    pubdate: dateStr,
-                    abstract: abstractText,
-                    type: type
-                };
-
-                return { id, data: item };
-
-            } catch (e) {
-                logToFile(`[PubMed] EFetch failed for ID ${id}: ${e}`);
-                return { id, data: null };
-            }
+        const xmlText = await res.text();
+        const parser = new XMLParser({
+            ignoreAttributes: false,
+            attributeNamePrefix: "@_"
         });
+        const parsed = parser.parse(xmlText);
 
-        const summaryResults = await Promise.all(summaryPromises);
+        const articleSet = parsed.PubmedArticleSet;
+        const articles = articleSet?.PubmedArticle
+            ? (Array.isArray(articleSet.PubmedArticle) ? articleSet.PubmedArticle : [articleSet.PubmedArticle])
+            : [];
 
-        const results = summaryResults.map(res => {
-            if (!res || !res.data) {
-                // Return minimal info for failed items instead of placeholder title
-                const id = res?.id || 'unknown';
+        const results: Paper[] = articles.map((articleData: any) => {
+            const article = articleData.MedlineCitation?.Article;
+            const pmid = articleData.MedlineCitation?.PMID?.['#text'] || articleData.MedlineCitation?.PMID || 'unknown';
+
+            if (!article) {
                 return {
-                    id: `pubmed_${id}`,
-                    title: `[PubMed] 상세 정보를 가져올 수 없습니다 (ID: ${id})`,
+                    id: `pubmed_${pmid}`,
+                    title: `[PubMed] 상세 정보를 가져올 수 없습니다 (ID: ${pmid})`,
                     authors: 'N/A',
                     journal: 'PubMed',
                     date: 'Unknown',
-                    abstract: '상세 정보를 불러오는 중 타임아웃이 발생했습니다.',
+                    abstract: '상세 정보를 불러오는 중 데이터 구조가 예상과 달랐습니다.',
                     tags: ['PubMed'],
-                    originalUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`,
+                    originalUrl: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
                     source: 'PubMed' as const
                 };
             }
 
-            const item = res.data;
+            // Authors
+            let authorStr = 'Unknown Authors';
+            if (article.AuthorList?.Author) {
+                const authors = Array.isArray(article.AuthorList.Author)
+                    ? article.AuthorList.Author
+                    : [article.AuthorList.Author];
+                authorStr = authors.map((a: any) => `${flattenText(a.LastName) || ''} ${flattenText(a.Initials) || ''}`.trim()).join(', ');
+            }
+
+            // Date
+            let dateStr = 'Unknown Date';
+            const pubDate = article.Journal?.JournalIssue?.PubDate;
+            if (pubDate) {
+                dateStr = `${flattenText(pubDate.Year) || ''} ${flattenText(pubDate.Month) || ''}`.trim();
+            }
+
+            // Abstract
+            let abstractText = 'No abstract available.';
+            if (article.Abstract?.AbstractText) {
+                abstractText = flattenText(article.Abstract.AbstractText);
+            }
+
+            // Publication Type
+            let type = 'Journal Article';
+            if (article.PublicationTypeList?.PublicationType) {
+                const pts = Array.isArray(article.PublicationTypeList.PublicationType)
+                    ? article.PublicationTypeList.PublicationType
+                    : [article.PublicationTypeList.PublicationType];
+                const priorityTypes = ['Meta-Analysis', 'Systematic Review', 'Clinical Trial', 'Case Reports', 'Review'];
+                const found = pts.map((pt: any) => flattenText(pt)).find((pt: string) => priorityTypes.includes(pt));
+                type = found || flattenText(pts[0]);
+            }
+
             return {
-                id: `pubmed_${res.id}`,
-                title: item.title || 'Untitled',
-                authors: item.authors || 'Unknown Authors',
-                journal: item.fulljournalname || 'Unknown Journal',
-                date: item.pubdate || 'Unknown Date',
-                abstract: item.abstract || `[PubMed ID: ${res.id}] Abstract not available.`,
+                id: `pubmed_${pmid}`,
+                title: flattenText(article.ArticleTitle) || 'Untitled',
+                authors: authorStr,
+                journal: flattenText(article.Journal?.Title) || 'Unknown Journal',
+                date: dateStr,
+                abstract: abstractText,
                 tags: ['PubMed'],
-                originalUrl: `https://pubmed.ncbi.nlm.nih.gov/${res.id}/`,
+                originalUrl: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`,
                 source: 'PubMed' as const,
-                type: item.type
+                type: type
             };
         });
 
-        logToFile(`[PubMed] Returning ${results.length} papers.`);
-        return results;
-
+        // Ensure we return exactly what ESearch found (even if empty placeholders)
+        // but EFetch usually returns what it finds.
         logToFile(`[PubMed] Returning ${results.length} papers.`);
         return results;
 
@@ -321,6 +294,50 @@ const xmlParser = new XMLParser({
     attributeNamePrefix: '@_'
 });
 
+/**
+ * HTML 엔티티 (예: &#x2009;, &nbsp;, &lt; 등)를 일반 텍스트로 복원합니다.
+ */
+export function decodeEntities(text: string): string {
+    if (!text) return '';
+    return text.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/&#([0-9]+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+        .replace(/&quot;/g, '"')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&apos;/g, "'");
+}
+
+/**
+ * XML 파싱 결과로 생성된 객체/배열을 평면 문자열로 변환합니다.
+ * 태그(sup, sub 등)가 포함된 경우에도 텍스트만 추출하여 React 렌더링 오류를 방지하며,
+ * 특수 문자 인코딩 문제(글자 깨짐)를 해결하기 위해 디코딩을 수행합니다.
+ */
+export function flattenText(val: any): string {
+    if (val === undefined || val === null) return '';
+    if (typeof val === 'string') return decodeEntities(val);
+    if (typeof val === 'number') return String(val);
+    if (Array.isArray(val)) {
+        return val.map(flattenText).join(' ').trim();
+    }
+    if (typeof val === 'object') {
+        let text = '';
+        if (val['#text'] !== undefined) {
+            text += flattenText(val['#text']);
+        }
+        for (const key of Object.keys(val)) {
+            if (key === '#text' || key.startsWith('@_')) continue;
+            const childText = flattenText(val[key]);
+            if (childText) {
+                text += (text ? ' ' : '') + childText;
+            }
+        }
+        return text.trim();
+    }
+    return '';
+}
+
 export async function fetchKciPapers(
     query: string,
     options: SearchOptions = {}
@@ -366,14 +383,8 @@ export async function fetchKciPapers(
             const articleInfo = record.articleInfo || {};
             const journalInfo = record.journalInfo || {};
 
-            // Safe extraction helper
-            const getText = (val: any) => {
-                if (!val) return '';
-                if (typeof val === 'string') return val;
-                if (val['#text']) return val['#text'];
-                if (Array.isArray(val)) return getText(val[0]);
-                return '';
-            };
+            // Safe extraction helper (Now uses flattenText)
+            const getText = (val: any) => flattenText(val);
 
             const articleId = articleInfo['@_article-id'] || record.articleId || record.id || Math.random().toString(36).substring(7);
             const titleGroup = articleInfo['title-group'] || {};
@@ -451,7 +462,7 @@ export async function fetchKciAbstract(articleId: string): Promise<string | null
         if (abstractGroup?.abstract) {
             const absList = Array.isArray(abstractGroup.abstract) ? abstractGroup.abstract : [abstractGroup.abstract];
             const korAbs = absList.find((a: any) => a['@_lang'] === 'original' || a['@_lang'] === 'korean');
-            return korAbs ? (korAbs['#text'] || korAbs) : (absList[0]['#text'] || absList[0]);
+            return flattenText(korAbs || absList[0]);
         }
         return null;
     } catch (error) {
