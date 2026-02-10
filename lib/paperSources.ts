@@ -32,6 +32,8 @@ export interface SearchOptions {
     minDate?: string;  // YYYY/MM/DD
     maxDate?: string;
     mode?: SearchMode;
+    fullTextOnly?: boolean;
+    category?: string;
 }
 
 const DEFAULT_OPTIONS: SearchOptions = {
@@ -124,8 +126,11 @@ export async function fetchPubmedPapers(
             searchTerms += ' AND ("meta-analysis"[pt] OR "systematic review"[pt])';
         } else if (opts.mode === 'clinical') {
             searchTerms += ' AND ("case reports"[pt] OR "clinical trial"[pt] OR "meta-analysis"[pt] OR "systematic review"[pt])';
-        } else if (opts.mode === 'latest') {
-            // Handled by date filters usually, but can add priority
+        }
+
+        // Apply Full-Text Filter
+        if (opts.fullTextOnly) {
+            searchTerms += ' AND ("free full text"[sb] OR "open access"[filter])';
         }
 
         let searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(searchTerms)}&retmode=json&retmax=${opts.maxResults}${apiKey}`;

@@ -11,6 +11,9 @@ export async function GET(req: Request) {
     const sort = (searchParams.get('sort') as 'date' | 'relevance') || 'date';
     const mode = (searchParams.get('mode') as any) || 'general';
 
+    const fullTextOnly = searchParams.get('fullTextOnly') === 'true';
+    const category = searchParams.get('category') || '';
+
     if (!query) {
         return NextResponse.json({ papers: [] });
     }
@@ -18,27 +21,52 @@ export async function GET(req: Request) {
     const options: SearchOptions = {
         maxResults: Math.min(limit, 20),  // Cap at 20
         sort,
-        mode
+        mode,
+        fullTextOnly,
+        category
     };
 
-    // 1. Translate Korean query to English for PubMed
+    // 1. Semantic Query Expansion (Translation + MeSH)
     let englishQuery = query;
-    if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query)) {
+    // Always run through Gemini if it's Korean OR if a category is selected (for MeSH expansion)
+    if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query) || category) {
         try {
             const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-            let modeContext = "";
-            if (mode === 'clinical') modeContext = " Focus on clinical trials, case reports, and experimental studies.";
-            if (mode === 'evidence') modeContext = " Focus on systematic reviews and meta-analyses.";
+            const categoryPrompts: Record<string, string> = {
+                'obgyn': 'Focus on Obstetrics, Gynecology, Infertility, PCOS, Pregnancy, Endometriosis.',
+                'kmd': 'Focus on Traditional Korean Medicine, Acupuncture, Herbal Medicine.',
+                'neuro': 'Focus on Neuroscience, Behavioral Psychology, Depression, Brain Science.',
+                'nutrition': 'Focus on Nutrition, Diet Therapy, Weight Loss, Metabolism.',
+                'exercise': 'Focus on Exercise Physiology, Sports Medicine, Rehabilitation.',
+                'pharm': 'Focus on Pharmacology, Natural Products, Phytotherapy.'
+            };
 
-            const prompt = `Translate the following Korean medical search term into a concise English phrase optimized for PubMed search.${modeContext} Output ONLY the English phrase: "${query}"`;
+            const context = categoryPrompts[category as string] || '';
+            const prompt = `
+            You are an expert medical research assistant.
+            User Query: "${query}"
+            Context: ${context}
+            Task:
+            1. Translate the query to English medical terms if needed.
+            2. If a specific medical context is provided, expand the query with highly relevant MeSH Terms (Medical Subject Headings) to improve search precision.
+            3. Construct a valid PubMed search string using operators (AND, OR).
+            4. Output ONLY the raw query string (e.g., "(Probiotics) AND (Depression[MeSH] OR Gut Microbiome)"). Do not add markdown or explanations.
+            `;
 
             const result = await model.generateContent(prompt);
             const response = await result.response;
-            englishQuery = response.text().trim().replace(/[".]/g, ''); // Clean quotes and dots
-            console.log(`[Papers API] Mode: ${mode}, Translated "${query}" -> "${englishQuery}"`);
+            englishQuery = response.text().trim().replace(/[".]/g, ''); // Clean quotes and dots, but keep () and []
+            // Allow basic cleanup but preserve essential search syntax
+            englishQuery = englishQuery.replace(/^```|```$/g, '').trim();
+
+            console.log(`[Papers API] Category: ${category}, Translated "${query}" -> "${englishQuery}"`);
         } catch (err) {
-            console.error('[Papers API] Translation error:', err);
+            console.error('[Papers API] Translation/Expansion error:', err);
+            // Fallback: simple translation if regex matches Korean
+            if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query)) {
+                // naive fallback or just use original
+            }
         }
     }
 
