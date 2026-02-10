@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
+import AuthModal from './components/AuthModal';
 
 interface Paper {
     id: string;
@@ -60,12 +61,43 @@ export default function Home() {
         { id: 'pharm', label: '약리/성분' },
     ];
 
+    // Auth State
+    const [user, setUser] = useState<any>(null);
+    const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const inlinePlayerRef = useRef<HTMLDivElement | null>(null);
 
     // Prevent hydration mismatch
     useEffect(() => {
         setIsMounted(true);
+        // Check active session
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setUser(session?.user ?? null);
+            if (session?.user) {
+                loadUserData(session.user.id);
+            } else {
+                setLoading(false);
+                setIsInitialLoading(false);
+            }
+        });
+
+        const {
+            data: { subscription },
+        } = supabase.auth.onAuthStateChange((_event, session) => {
+            setUser(session?.user ?? null);
+            if (session?.user) {
+                loadUserData(session.user.id);
+            } else {
+                // Reset data on logout
+                setInterestKeywords([]);
+                setSavedPapers([]);
+                setPapers([]);
+                fetchDailyCuration([]); // Clear curation
+            }
+        });
+
+        return () => subscription.unsubscribe();
     }, []);
 
     // Intersection Observer for mini player
@@ -86,50 +118,54 @@ export default function Home() {
         return () => observer.disconnect();
     }, [currentPaper, isPlaying]);
 
-    // Initial load: keywords and saved papers from Supabase
-    useEffect(() => {
-        const loadInitialData = async () => {
-            setIsInitialLoading(true);
-            try {
-                // Fetch keywords
-                const { data: keywordData } = await supabase
-                    .from('user_settings')
-                    .select('value')
-                    .eq('key', 'interestKeywords')
-                    .maybeSingle();
+    // Load user data from new table `user_preferences`
+    const loadUserData = async (userId: string) => {
+        setIsInitialLoading(true);
+        try {
+            const { data, error } = await supabase
+                .from('user_preferences')
+                .select('*')
+                .eq('user_id', userId)
+                .single();
 
-                // Fetch saved papers
-                const { data: savedData } = await supabase
-                    .from('user_settings')
-                    .select('value')
-                    .eq('key', 'savedPapers')
-                    .maybeSingle();
-
-                let ks = ['Acupuncture', '한의학']; // Default
-                if (keywordData && keywordData.value) {
-                    ks = keywordData.value;
-                }
-                setInterestKeywords(ks);
-
-                if (savedData && savedData.value) {
-                    setSavedPapers(savedData.value);
-                }
-
-                await fetchDailyCuration(ks);
-            } catch (err) {
-                console.error('Initial Load Error:', err);
-            } finally {
-                setIsInitialLoading(false);
-                setLoading(false);
+            if (error && error.code !== 'PGRST116') { // PGRST116 is "Row not found"
+                console.error('Error loading user data:', error);
             }
-        };
 
-        loadInitialData();
-    }, []);
+            let ks = ['Acupuncture', '한의학'];
+            if (data?.interest_keywords) {
+                ks = data.interest_keywords;
+            } else if (!data) {
+                // Create initial row if not exists
+                const { error: insertError } = await supabase
+                    .from('user_preferences')
+                    .insert([{ user_id: userId, interest_keywords: ks, saved_papers: [] }]);
+
+                if (insertError) console.error('Error creating user profile:', insertError);
+            }
+
+            setInterestKeywords(ks);
+
+            if (data?.saved_papers) {
+                setSavedPapers(data.saved_papers as Paper[]);
+            }
+
+            await fetchDailyCuration(ks);
+        } catch (err) {
+            console.error('Initial Load Error:', err);
+        } finally {
+            setIsInitialLoading(false);
+            setLoading(false);
+        }
+    };
 
     const fetchDailyCuration = async (keywords: string[]) => {
         setIsInitialLoading(true);
         try {
+            if (keywords.length === 0) {
+                setPapers([]);
+                return;
+            }
             // Fetch papers for each keyword and merge
             const allPapers: Paper[] = [];
             for (const k of keywords) {
@@ -179,10 +215,12 @@ export default function Home() {
     };
 
     const updateKeywordsInDb = async (newKs: string[]) => {
+        if (!user) return;
         try {
             const { error } = await supabase
-                .from('user_settings')
-                .upsert({ key: 'interestKeywords', value: newKs }, { onConflict: 'key' });
+                .from('user_preferences')
+                .update({ interest_keywords: newKs, updated_at: new Date() })
+                .eq('user_id', user.id);
 
             if (error) throw error;
         } catch (err) {
@@ -191,10 +229,12 @@ export default function Home() {
     };
 
     const updateSavedPapersInDb = async (newSaved: Paper[]) => {
+        if (!user) return;
         try {
             const { error } = await supabase
-                .from('user_settings')
-                .upsert({ key: 'savedPapers', value: newSaved }, { onConflict: 'key' });
+                .from('user_preferences')
+                .update({ saved_papers: newSaved, updated_at: new Date() })
+                .eq('user_id', user.id);
 
             if (error) throw error;
         } catch (err) {
@@ -203,6 +243,10 @@ export default function Home() {
     };
 
     const toggleSavePaper = (paper: Paper) => {
+        if (!user) {
+            setIsAuthModalOpen(true);
+            return;
+        }
         const isSaved = savedPapers.some(p => p.id === paper.id);
         let newSaved;
         if (isSaved) {
@@ -215,6 +259,10 @@ export default function Home() {
     };
 
     const addKeyword = async (k: string) => {
+        if (!user) {
+            setIsAuthModalOpen(true);
+            return;
+        }
         if (!k || interestKeywords.includes(k)) return;
         const newKs = [...interestKeywords, k];
         setInterestKeywords(newKs);
@@ -358,6 +406,12 @@ export default function Home() {
         <div
             className="min-h-screen bg-slate-50 flex flex-col max-w-lg mx-auto shadow-2xl overflow-hidden font-sans"
         >
+            <AuthModal
+                isOpen={isAuthModalOpen}
+                onClose={() => setIsAuthModalOpen(false)}
+                onLoginSuccess={() => setIsAuthModalOpen(false)}
+            />
+
             {/* Header */}
             <header className="bg-white/80 backdrop-blur-md p-6 sticky top-0 z-10 border-b border-slate-100">
                 <div className="flex justify-between items-center mb-6">
@@ -365,8 +419,23 @@ export default function Home() {
                         <h1 className="text-3xl font-black text-slate-900 tracking-tight">Morning Article</h1>
                         <p className="text-sm font-semibold text-blue-600 uppercase tracking-widest mt-1">Medical insight assistant</p>
                     </div>
-                    <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-lg rotate-3">
-                        <Music size={24} />
+                    <div className="flex gap-2">
+                        {/* User/Auth Button */}
+                        <button
+                            onClick={() => {
+                                if (user) {
+                                    if (confirm('로그아웃 하시겠습니까?')) {
+                                        supabase.auth.signOut();
+                                    }
+                                } else {
+                                    setIsAuthModalOpen(true);
+                                }
+                            }}
+                            className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg transition-all ${user ? 'bg-slate-100 text-slate-600 hover:bg-slate-200' : 'bg-slate-900 text-white hover:bg-slate-800'
+                                }`}
+                        >
+                            {user ? <LogOut size={24} /> : <User size={24} />}
+                        </button>
                     </div>
                 </div>
 
