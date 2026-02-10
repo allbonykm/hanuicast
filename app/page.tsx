@@ -55,10 +55,10 @@ export default function Home() {
         { id: '', label: '전체' },
         { id: 'obgyn', label: '통합부인과' },
         { id: 'kmd', label: '통합의학' },
-        { id: 'neuro', label: '신경/심리' },
+        { id: 'neuro', label: '신경/행동심리' },
         { id: 'nutrition', label: '영양/대사' },
         { id: 'exercise', label: '임상운동' },
-        { id: 'pharm', label: '약리/성분' },
+        { id: 'pharm', label: '약리/한약재' },
     ];
 
     // Auth State
@@ -324,7 +324,7 @@ export default function Home() {
 
         // If audio already exists, just play it
         if (paper.audioUrl) {
-            setIsPlaying(true);
+            // No manual setIsPlaying(true) here
             return;
         }
 
@@ -380,7 +380,8 @@ export default function Home() {
             const updatedPaper = { ...paper, audioUrl, summaryScript: script };
             setCurrentPaper(updatedPaper);
             setPapers(prev => prev.map(p => p.id === paper.id ? updatedPaper : p));
-            setIsPlaying(true);
+            // No manual setIsPlaying(true) here. 
+            // The <audio> element has autoPlay, and its onPlay listener will call setIsPlaying(true).
         } catch (err: any) {
             console.error('Podcast Generation Error:', err);
             alert(`오류 발생: ${err.message}`);
