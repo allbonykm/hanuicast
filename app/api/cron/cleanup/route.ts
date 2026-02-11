@@ -19,29 +19,31 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: 'Server misconfiguration: Missing Admin Key' }, { status: 500 });
         }
 
-        // 2. Fetch "Protected" Files (WhiteList) from user_settings
-        // We need to get ALL saved papers.
-        // Assuming user_settings.savedPapers contains all of them.
-        const { data: settingsData, error: settingsError } = await supabaseAdmin
-            .from('user_settings')
-            .select('value')
-            .eq('key', 'savedPapers')
-            .maybeSingle();
+        // 2. Fetch "Protected" Files (WhiteList) from user_preferences
+        // Extract saved_papers from ALL users to ensure no one's saved audio is deleted.
+        const { data: prefsData, error: prefsError } = await supabaseAdmin
+            .from('user_preferences')
+            .select('saved_papers');
 
-        if (settingsError) {
-            console.error('[Cleanup Cron] Failed to fetch savedPapers:', settingsError);
+        if (prefsError) {
+            console.error('[Cleanup Cron] Failed to fetch saved_papers:', prefsError);
             throw new Error('Failed to fetch whitelist');
         }
 
         const protectedFiles = new Set<string>();
-        if (settingsData && Array.isArray(settingsData.value)) {
-            settingsData.value.forEach((paper: any) => {
-                if (paper.audioUrl) {
-                    // Extract filename from URL
-                    // Example: https://.../storage/v1/object/public/podcast-audio/podcast_1739180905436.mp3
-                    const parts = paper.audioUrl.split('/');
-                    const filename = parts[parts.length - 1];
-                    if (filename) protectedFiles.add(filename);
+        if (prefsData && Array.isArray(prefsData)) {
+            prefsData.forEach((pref: any) => {
+                const savedPapers = pref.saved_papers;
+                if (Array.isArray(savedPapers)) {
+                    savedPapers.forEach((paper: any) => {
+                        if (paper.audioUrl) {
+                            // Extract filename from URL
+                            // Example: https://.../storage/v1/object/public/podcast-audio/podcast_1739180905436.mp3
+                            const parts = paper.audioUrl.split('/');
+                            const filename = parts[parts.length - 1];
+                            if (filename) protectedFiles.add(filename);
+                        }
+                    });
                 }
             });
         }
