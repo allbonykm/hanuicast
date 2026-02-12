@@ -11,6 +11,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.93.3",
+    "@types/node-fetch": "^2.6.13",
     "bufferutil": "^4.1.0",
     "clsx": "^2.1.1",
     "dotenv": "^17.2.3",
@@ -19,6 +20,7 @@
     "lucide-react": "^0.563.0",
     "next": "16.1.6",
     "node-edge-tts": "^1.2.9",
+    "node-fetch": "^3.3.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tailwind-merge": "^3.4.0",

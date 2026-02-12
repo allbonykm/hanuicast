@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { fetchPubmedPapers, fetchKciPapers, logToFile, Paper, SearchOptions } from '@/lib/paperSources';
+import { fetchPubmedPapers, fetchKciPapers, fetchKampoPapers, fetchJStagePapers, fetchSemanticScholarPapers, logToFile, Paper, SearchOptions } from '@/lib/paperSources';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -26,9 +26,13 @@ export async function GET(req: Request) {
         category
     };
 
-    // 1. Semantic Query Expansion (Translation + MeSH)
+    // 1. Semantic Query Expansion (Translation + MeSH + Kampo + J-STAGE JP + Chinese)
     let englishQuery = query;
-    // Always run through Gemini if it's Korean OR if a category is selected (for MeSH expansion)
+    let japaneseQuery = query;
+    let chineseQuery = query;
+    let recommendedKampoIds: string[] = [];
+
+    // Always run through Gemini if it's Korean OR if a category is selected
     if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query) || category) {
         try {
             const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
@@ -44,60 +48,69 @@ export async function GET(req: Request) {
 
             const context = categoryPrompts[category as string] || '';
             const prompt = `
-            You are an expert medical research assistant.
+            You are an expert medical research assistant specializing in global medical research (PubMed), Traditional Korean Medicine (KCI), and East Asian Medicine (KampoDB, J-STAGE, CNKI).
             User Query: "${query}"
             Context: ${context}
+            
             Task:
             1. Translate the query to English medical terms if needed.
-            2. If a specific medical context is provided, expand the query with highly relevant MeSH Terms (Medical Subject Headings) to improve search precision.
-            3. Construct a valid PubMed search string using operators (AND, OR).
-            4. Output ONLY the raw query string (e.g., "(Probiotics) AND (Depression[MeSH] OR Gut Microbiome)"). Do not add markdown or explanations.
+            2. Expand the PubMed query with highly relevant MeSH Terms.
+            3. Recommend up to 3 relevant Kampo Formula IDs (e.g., KT, GRS, ACS) from the KampoDB system.
+            4. Translate the query to Japanese scholarly/medical terms for J-STAGE.
+            5. Translate the query to Chinese simplified (간체) medical terms for Chinese literature search, using professional CBM (Chinese Biomedical Literature) indexing conventions if possible.
+            
+            Output MUST be in JSON format:
+            {
+                "pubmedQuery": "valid pubmed search string",
+                "kampoIds": ["ID1", "ID2", ...],
+                "japaneseQuery": "Japanese search string",
+                "chineseQuery": "Simplified Chinese search string"
+            }
             `;
 
             const result = await model.generateContent(prompt);
-            const response = await result.response;
-            englishQuery = response.text().trim().replace(/[".]/g, ''); // Clean quotes and dots, but keep () and []
-            // Allow basic cleanup but preserve essential search syntax
-            englishQuery = englishQuery.replace(/^```|```$/g, '').trim();
+            const responseText = result.response.text().trim();
+            const jsonStr = responseText.replace(/```json|```/g, '').trim();
+            const aiData = JSON.parse(jsonStr);
 
-            console.log(`[Papers API] Category: ${category}, Translated "${query}" -> "${englishQuery}"`);
+            englishQuery = aiData.pubmedQuery || query;
+            recommendedKampoIds = aiData.kampoIds || [];
+            japaneseQuery = aiData.japaneseQuery || query;
+            chineseQuery = aiData.chineseQuery || query;
+
+            console.log(`[Papers API] AI Expansion Decided: PubMed="${englishQuery}", J-STAGE="${japaneseQuery}", Chinese="${chineseQuery}"`);
         } catch (err) {
-            console.error('[Papers API] Translation/Expansion error:', err);
-            // Fallback: simple translation if regex matches Korean
-            if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query)) {
-                // naive fallback or just use original
-            }
+            console.error('[Papers API] AI Expansion error:', err);
         }
     }
 
-    // 2. Fetch from both sources in parallel (with error resilience)
-    const [pubmedResult, kciResult] = await Promise.allSettled([
+    // 2. Fetch from all sources in parallel
+    // OASIS is deferred for now.
+    const [pubmedResult, kciResult, kampoResult, jstageResult, semanticScholarResult] = await Promise.allSettled([
         fetchPubmedPapers(englishQuery, options),
-        fetchKciPapers(query, options)
+        fetchKciPapers(query, options),
+        fetchKampoPapers(recommendedKampoIds),
+        fetchJStagePapers(japaneseQuery, options),
+        fetchSemanticScholarPapers(`${englishQuery} ${chineseQuery}`, options) // Merge English and Chinese for Semantic Scholar
     ]);
 
     const pubmedPapers: Paper[] = (pubmedResult.status === 'fulfilled' && Array.isArray(pubmedResult.value)) ? pubmedResult.value : [];
     const kciPapers: Paper[] = (kciResult.status === 'fulfilled' && Array.isArray(kciResult.value)) ? kciResult.value : [];
+    const kampoPapers: Paper[] = (kampoResult.status === 'fulfilled' && Array.isArray(kampoResult.value)) ? kampoResult.value : [];
+    const jstagePapers: Paper[] = (jstageResult.status === 'fulfilled' && Array.isArray(jstageResult.value)) ? jstageResult.value : [];
+    const ssPapers: Paper[] = (semanticScholarResult.status === 'fulfilled' && Array.isArray(semanticScholarResult.value)) ? semanticScholarResult.value : [];
 
-    console.log(`[Papers API] Fetch results - PubMed: ${pubmedResult.status} (${pubmedPapers.length}), KCI: ${kciResult.status} (${kciPapers.length})`);
-
-    // Log any errors
-    if (pubmedResult.status === 'rejected') {
-        console.error('[Papers API] PubMed fetch failed:', pubmedResult.reason);
-    }
-    if (kciResult.status === 'rejected') {
-        console.error('[Papers API] KCI fetch failed:', kciResult.reason);
-    }
+    console.log(`[Papers API] Results - PubMed: ${pubmedPapers.length}, KCI: ${kciPapers.length}, Kampo: ${kampoPapers.length}, J-STAGE: ${jstagePapers.length}, SemScholar: ${ssPapers.length}`);
 
     // 3. Combine and sort
     try {
-        const combined = [...pubmedPapers, ...kciPapers].sort((a, b) => {
+        const others = [...pubmedPapers, ...kciPapers, ...jstagePapers, ...ssPapers].sort((a, b) => {
             const dateA = new Date(a.date.replace(/\//g, '-'));
             const dateB = new Date(b.date.replace(/\//g, '-'));
             return dateB.getTime() - dateA.getTime();
         });
 
-        console.log(`[Papers API] Returning ${combined.length} papers (PubMed: ${pubmedPapers.length}, KCI: ${kciPapers.length})`);
+        const combined = [...kampoPapers, ...others];
 
         return NextResponse.json({
             papers: combined,
@@ -106,6 +119,9 @@ export async function GET(req: Request) {
                 translatedQuery: englishQuery !== query ? englishQuery : undefined,
                 pubmedCount: pubmedPapers.length,
                 kciCount: kciPapers.length,
+                kampoCount: kampoPapers.length,
+                jstageCount: jstagePapers.length,
+                semanticScholarCount: ssPapers.length,
                 totalCount: combined.length
             }
         });

@@ -603,11 +603,11 @@ export default function Home() {
                                         >
                                             <div className="flex justify-between items-start mb-3">
                                                 <div className="flex gap-2 flex-wrap">
-                                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : 'bg-blue-600'}`}>
-                                                        {paper.id.startsWith('kci_') ? 'KCI' : 'PubMed'}
+                                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : paper.id.startsWith('kampodb_') ? 'bg-amber-700' : paper.id.startsWith('jstage_') ? 'bg-violet-700' : paper.id.startsWith('semanticscholar_') ? 'bg-indigo-600' : 'bg-blue-600'}`}>
+                                                        {paper.id.startsWith('kci_') ? 'KCI' : paper.id.startsWith('kampodb_') ? 'KampoDB' : paper.id.startsWith('jstage_') ? 'J-STAGE' : paper.id.startsWith('semanticscholar_') ? 'AI-HUB' : 'PubMed'}
                                                     </span>
                                                     {paper.type && (
-                                                        <span className="px-2 py-0.5 bg-slate-900 text-white rounded-lg text-[10px] font-black uppercase tracking-wider">
+                                                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${paper.type === 'Formula' ? 'bg-amber-100 text-amber-900' : 'bg-slate-900 text-white'}`}>
                                                             {paper.type}
                                                         </span>
                                                     )}
@@ -629,7 +629,7 @@ export default function Home() {
                                                 </button>
                                             </div>
 
-                                            <h3 className={`text-slate-900 leading-tight transition-all ${paper.id.startsWith('kci_') ? 'font-semibold' : 'font-bold'} ${expandedPaperId === paper.id ? 'text-2xl' : 'text-lg line-clamp-2'}`}>
+                                            <h3 className={`text-slate-900 leading-tight transition-all ${paper.id.startsWith('kci_') || paper.id.startsWith('kampodb_') || paper.id.startsWith('jstage_') || paper.id.startsWith('semanticscholar_') ? 'font-semibold' : 'font-bold'} ${expandedPaperId === paper.id ? 'text-2xl' : 'text-lg line-clamp-2'}`}>
                                                 {paper.title}
                                             </h3>
 
@@ -655,7 +655,7 @@ export default function Home() {
                                                     className="border-t border-slate-50 bg-slate-50/30"
                                                 >
                                                     <div className="p-6">
-                                                        <p className="text-sm text-slate-700 leading-relaxed mb-6 font-medium">
+                                                        <p className={`text-sm text-slate-700 leading-relaxed mb-6 font-medium ${paper.id.startsWith('kampodb_') ? 'whitespace-pre-wrap' : ''}`}>
                                                             {paper.abstract}
                                                         </p>
                                                         <div className="flex flex-wrap gap-2 mb-6">

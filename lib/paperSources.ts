@@ -20,7 +20,7 @@ export interface Paper {
     abstract: string;
     tags: string[];
     originalUrl: string;
-    source: 'PubMed' | 'KCI';
+    source: 'PubMed' | 'KCI' | 'KampoDB' | 'J-STAGE' | 'Semantic Scholar';
     type?: string; // e.g. 'Case Report', 'Review', 'Clinical Trial'
 }
 
@@ -221,6 +221,8 @@ export async function fetchPubmedPapers(
             let abstractText = 'No abstract available.';
             if (article.Abstract?.AbstractText) {
                 abstractText = flattenText(article.Abstract.AbstractText);
+                // Fix: Remove artifacts like "P P P P P P" that appear in some PubMed abstracts
+                abstractText = abstractText.replace(/(\s*P){3,}\s*/g, ' ').trim();
             }
 
             // Publication Type
@@ -473,5 +475,206 @@ export async function fetchKciAbstract(articleId: string): Promise<string | null
     } catch (error) {
         console.error('[KCI] Abstract fetch error:', error);
         return null;
+    }
+}
+
+// ============================================================
+// KampoDB API
+// ============================================================
+
+export async function fetchKampoPapers(
+    formulaIds: string[]
+): Promise<Paper[]> {
+    if (!formulaIds || formulaIds.length === 0) return [];
+
+    try {
+        logToFile(`[KampoDB] Fetching details for IDs: ${formulaIds.join(', ')}`);
+
+        const paperPromises = formulaIds.map(async (id) => {
+            return fetchKampoFormulaDetails(id);
+        });
+
+        const results = await Promise.all(paperPromises);
+        return results.filter((p): p is Paper => p !== null);
+    } catch (error: any) {
+        logToFile(`[KampoDB] Error: ${error.message}`);
+        return [];
+    }
+}
+
+async function fetchKampoFormulaDetails(id: string): Promise<Paper | null> {
+    try {
+        // 1. Basic Info
+        const infoUrl = `https://wakanmoview.inm.u-toyama.ac.jp/kampo/api/formula/${id}/info`;
+        const crudeUrl = `https://wakanmoview.inm.u-toyama.ac.jp/kampo/api/formula/${id}/crude`;
+        const diseaseUrl = `https://wakanmoview.inm.u-toyama.ac.jp/kampo/api/formula/${id}/disease`;
+
+        const [infoRes, crudeRes, diseaseRes] = await Promise.all([
+            fetchWithTimeout(infoUrl),
+            fetchWithTimeout(crudeUrl),
+            fetchWithTimeout(diseaseUrl)
+        ]);
+
+        if (!infoRes.ok) return null;
+
+        const info = await infoRes.json();
+        const crudes = crudeRes.ok ? await crudeRes.json() : [];
+        const diseases = diseaseRes.ok ? await diseaseRes.json() : [];
+
+        // Build Title
+        const title = `[한방] ${info.name} (${info.name_jp})`;
+
+        // Build Abstract (Crudes + Top Diseases)
+        const crudeList = Array.isArray(crudes) ? crudes.map((c: any) => c.name).join(', ') : '';
+        const diseaseList = Array.isArray(diseases) ? diseases.slice(0, 5).map((d: any) => d.name).join(', ') : '';
+
+        let abstract = `[구성 약재] ${crudeList || '정보 없음'}\n\n`;
+        abstract += `[주요 적응증/활성] ${diseaseList || '정보 없음'}\n\n`;
+        abstract += `* KampoDB 데이터를 기반으로 생성된 정보입니다. 상세 기전 및 근거는 KampoDB 홈페이지에서 확인할 수 있습니다.`;
+
+        return {
+            id: `kampodb_${id}`,
+            title,
+            authors: 'Toyama University (KampoDB)',
+            journal: 'KampoDB (WAKAN-YAKU Research)',
+            date: new Date().toLocaleDateString('ja-JP'), // Latest info
+            abstract,
+            tags: ['Kampo', 'Traditional Medicine'],
+            originalUrl: `https://wakanmoview.inm.u-toyama.ac.jp/kampo/formula/${id}`,
+            source: 'KampoDB',
+            type: 'Formula'
+        };
+    } catch (error) {
+        console.error(`[KampoDB] Failed to fetch details for ${id}:`, error);
+        return null;
+    }
+}
+
+// ============================================================
+// J-STAGE API
+// ============================================================
+
+export async function fetchJStagePapers(
+    query: string,
+    options: SearchOptions = {}
+): Promise<Paper[]> {
+    if (!query) return [];
+
+    const opts = { ...DEFAULT_OPTIONS, ...options };
+
+    try {
+        // service 3 = article search, count = results
+        const url = `https://api.jstage.jst.go.jp/searchapi/do?service=3&keyword=${encodeURIComponent(query)}&count=${opts.maxResults}`;
+
+        logToFile(`[J-STAGE] Fetching: ${url}`);
+        const res = await fetchWithTimeout(url);
+
+        if (!res.ok) {
+            logToFile(`[J-STAGE] Fetch failed: ${res.statusText}`);
+            return [];
+        }
+
+        const xmlText = await res.text();
+        const data = xmlParser.parse(xmlText);
+
+        const entries = data?.feed?.entry;
+        if (!entries) return [];
+
+        const entryList = Array.isArray(entries) ? entries : [entries];
+
+        return entryList.map((entry: any) => {
+            const getText = (val: any) => flattenText(val);
+
+            const titleEn = getText(entry.article_title?.en || entry.title);
+            const titleJa = getText(entry.article_title?.ja);
+            const title = titleEn || titleJa || 'Untitled';
+
+            const entryId = getText(entry.id) || getText(entry.link?.['@_href']) || getText(entry.article_link?.en);
+            const shortId = entryId.split('/').filter(Boolean).pop() || Math.random().toString(36).substring(7);
+
+            let authors = 'Unknown Authors';
+            const authorData = entry.author?.en || entry.author?.ja || entry.author;
+            if (authorData) {
+                const authorNodes = Array.isArray(authorData) ? authorData : [authorData];
+                const names = authorNodes.flatMap((a: any) => {
+                    const n = a.name;
+                    if (Array.isArray(n)) return n.map(getText);
+                    return [getText(n)];
+                }).filter(Boolean);
+                if (names.length > 0) authors = names.join(', ');
+            }
+
+            const journal = getText(entry.material_title?.en || entry.material_title?.ja || entry['prism:publicationName'] || 'J-STAGE');
+            const pubDate = getText(entry.pubyear || entry['prism:publicationDate'] || entry.updated || 'Unknown Date');
+
+            return {
+                id: `jstage_${shortId}`,
+                title: title,
+                authors: authors,
+                journal: journal,
+                date: String(pubDate),
+                abstract: `[JP] ${titleJa || 'N/A'}\n[EN] ${titleEn || 'N/A'}`,
+                tags: ['J-STAGE'],
+                originalUrl: entryId || `https://www.jstage.jst.go.jp/article/`,
+                source: 'J-STAGE' as const,
+                type: 'Journal Article'
+            };
+        });
+
+    } catch (error: any) {
+        logToFile(`[J-STAGE] Fatal Error: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================================
+// Semantic Scholar API
+// ============================================================
+
+export async function fetchSemanticScholarPapers(
+    query: string,
+    options: SearchOptions = {}
+): Promise<Paper[]> {
+    if (!query) return [];
+
+    const opts = { ...DEFAULT_OPTIONS, ...options };
+
+    try {
+        const fields = 'title,url,abstract,venue,year,authors,citationCount';
+        const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${opts.maxResults}&fields=${fields}`;
+
+        logToFile(`[Semantic Scholar] Fetching: ${url}`);
+        const res = await fetchWithTimeout(url);
+
+        if (!res.ok) {
+            logToFile(`[Semantic Scholar] Fetch failed: ${res.statusText}`);
+            return [];
+        }
+
+        const data = await res.json();
+        const papers = data.data;
+
+        if (!papers || !Array.isArray(papers)) return [];
+
+        return papers.map((p: any) => {
+            const authors = p.authors?.map((a: any) => a.name).join(', ') || 'Unknown Authors';
+
+            return {
+                id: `semanticscholar_${p.paperId}`,
+                title: p.title || 'Untitled',
+                authors: authors,
+                journal: p.venue || 'Semantic Scholar',
+                date: String(p.year || 'Unknown Date'),
+                abstract: p.abstract || '[AI Search Result] Abstract not available in search snippet.',
+                tags: ['AI-Recommended'],
+                originalUrl: p.url || `https://www.semanticscholar.org/paper/${p.paperId}`,
+                source: 'Semantic Scholar' as const,
+                type: 'Scholarly Article'
+            };
+        });
+
+    } catch (error: any) {
+        logToFile(`[Semantic Scholar] Fatal Error: ${error.message}`);
+        return [];
     }
 }
