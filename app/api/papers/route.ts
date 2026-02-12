@@ -70,15 +70,24 @@ export async function GET(req: Request) {
 
             const result = await model.generateContent(prompt);
             const responseText = result.response.text().trim();
-            const jsonStr = responseText.replace(/```json|```/g, '').trim();
-            const aiData = JSON.parse(jsonStr);
+            // Robust JSON extraction: look for { ... } block
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            const jsonStr = jsonMatch ? jsonMatch[0] : responseText;
+
+            let aiData;
+            try {
+                aiData = JSON.parse(jsonStr);
+            } catch (pErr) {
+                console.error('[Papers API] JSON Parse Error. Raw:', responseText);
+                aiData = {};
+            }
 
             englishQuery = aiData.pubmedQuery || query;
             recommendedKampoIds = aiData.kampoIds || [];
             japaneseQuery = aiData.japaneseQuery || query;
             chineseQuery = aiData.chineseQuery || query;
 
-            console.log(`[Papers API] AI Expansion Decided: PubMed="${englishQuery}", J-STAGE="${japaneseQuery}", Chinese="${chineseQuery}"`);
+            console.log(`[Papers API] AI Expansion: PubMed="${englishQuery}", J-STAGE="${japaneseQuery}", Kampo=[${recommendedKampoIds}]`);
         } catch (err) {
             console.error('[Papers API] AI Expansion error:', err);
         }

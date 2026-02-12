@@ -611,9 +611,11 @@ export default function Home() {
                                                             {paper.type}
                                                         </span>
                                                     )}
-                                                    <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold uppercase tracking-tight">
-                                                        {paper.journal}
-                                                    </span>
+                                                    {paper.journal && paper.journal !== 'J-STAGE' && paper.journal !== 'Semantic Scholar' && (
+                                                        <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold uppercase tracking-tight">
+                                                            {paper.journal}
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 <button
                                                     onClick={(e) => {

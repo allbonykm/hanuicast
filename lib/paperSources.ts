@@ -583,28 +583,35 @@ export async function fetchJStagePapers(
         const entryList = Array.isArray(entries) ? entries : [entries];
 
         return entryList.map((entry: any) => {
-            const getText = (val: any) => flattenText(val);
+            const getText = (val: any) => {
+                const txt = flattenText(val);
+                return txt.trim();
+            };
 
-            const titleEn = getText(entry.article_title?.en || entry.title);
+            const titleEn = getText(entry.article_title?.en || entry.article_title || entry.title);
             const titleJa = getText(entry.article_title?.ja);
-            const title = titleEn || titleJa || 'Untitled';
+            const title = titleEn || titleJa || getText(entry.title) || 'Untitled';
 
             const entryId = getText(entry.id) || getText(entry.link?.['@_href']) || getText(entry.article_link?.en);
             const shortId = entryId.split('/').filter(Boolean).pop() || Math.random().toString(36).substring(7);
+
+            if (title === 'Untitled') {
+                logToFile(`[J-STAGE] Warning: Could not find title for entry. Raw keys: ${Object.keys(entry).join(',')}`);
+            }
 
             let authors = 'Unknown Authors';
             const authorData = entry.author?.en || entry.author?.ja || entry.author;
             if (authorData) {
                 const authorNodes = Array.isArray(authorData) ? authorData : [authorData];
                 const names = authorNodes.flatMap((a: any) => {
-                    const n = a.name;
+                    const n = a.name || a;
                     if (Array.isArray(n)) return n.map(getText);
                     return [getText(n)];
                 }).filter(Boolean);
                 if (names.length > 0) authors = names.join(', ');
             }
 
-            const journal = getText(entry.material_title?.en || entry.material_title?.ja || entry['prism:publicationName'] || 'J-STAGE');
+            const journal = getText(entry.material_title?.en || entry.material_title?.ja || entry.material_title || entry['prism:publicationName'] || 'J-STAGE');
             const pubDate = getText(entry.pubyear || entry['prism:publicationDate'] || entry.updated || 'Unknown Date');
 
             return {
@@ -647,6 +654,10 @@ export async function fetchSemanticScholarPapers(
         const res = await fetchWithTimeout(url);
 
         if (!res.ok) {
+            if (res.status === 429) {
+                logToFile(`[Semantic Scholar] Rate limited (429).`);
+                return [];
+            }
             logToFile(`[Semantic Scholar] Fetch failed: ${res.statusText}`);
             return [];
         }
@@ -666,7 +677,7 @@ export async function fetchSemanticScholarPapers(
                 journal: p.venue || 'Semantic Scholar',
                 date: String(p.year || 'Unknown Date'),
                 abstract: p.abstract || '[AI Search Result] Abstract not available in search snippet.',
-                tags: ['AI-Recommended'],
+                tags: ['AI-HUB'],
                 originalUrl: p.url || `https://www.semanticscholar.org/paper/${p.paperId}`,
                 source: 'Semantic Scholar' as const,
                 type: 'Scholarly Article'
