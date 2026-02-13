@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 import AuthModal from './components/AuthModal';
@@ -50,6 +50,7 @@ export default function Home() {
     const [selectedCategory, setSelectedCategory] = useState('obgyn'); // Default to Obs/Gyn as requested
     const [appliedQuery, setAppliedQuery] = useState('');
     const [showHelp, setShowHelp] = useState(false);
+    const [activeTab, setActiveTab] = useState<'papers' | 'trials'>('papers');
 
     const CATEGORIES = [
         { id: '', label: '전체' },
@@ -159,6 +160,16 @@ export default function Home() {
         }
     };
 
+    // Re-fetch when activeTab changes
+    useEffect(() => {
+        if (!isMounted) return;
+        if (searchQuery) {
+            fetchPapers(searchQuery);
+        } else {
+            fetchDailyCuration(interestKeywords);
+        }
+    }, [activeTab]);
+
     const fetchDailyCuration = async (keywords: string[]) => {
         setIsInitialLoading(true);
         try {
@@ -169,7 +180,7 @@ export default function Home() {
             // Fetch papers for each keyword and merge
             const allPapers: Paper[] = [];
             for (const k of keywords) {
-                const res = await fetch(`/api/papers?q=${encodeURIComponent(k)}&mode=${searchMode}`);
+                const res = await fetch(`/api/papers?q=${encodeURIComponent(k)}&mode=${searchMode}&sourceType=${activeTab}`);
                 const data = await res.json();
                 if (data.papers) {
                     // Add only unique papers
@@ -198,9 +209,12 @@ export default function Home() {
         }
 
         setLoading(true);
-        setAppliedQuery('');
+        setExpandedPaperId(null);
+        setAppliedQuery(q);
+
         try {
-            const res = await fetch(`/api/papers?q=${encodeURIComponent(q)}&mode=${mode}&fullTextOnly=${fullTextOnly}&category=${selectedCategory}`);
+            const url = `/api/papers?q=${encodeURIComponent(q)}&mode=${mode}&limit=20&sourceType=${activeTab}`;
+            const res = await fetch(url);
             const data = await res.json();
             setPapers(data.papers);
             // Always show the interpreted/translated query if available, to confirm what was searched
@@ -307,8 +321,8 @@ export default function Home() {
 
     const [statusMessage, setStatusMessage] = useState('');
 
-    const startPodcast = async (paper: Paper) => {
-        if (currentPaper?.id === paper.id) {
+    const startPodcast = async (paper: Paper, deep = false) => {
+        if (currentPaper?.id === paper.id && !deep) {
             if (isPlaying) {
                 audioRef.current?.pause();
                 setIsPlaying(false);
@@ -322,25 +336,25 @@ export default function Home() {
         setCurrentPaper(paper);
         setIsPlaying(false);
 
-        // If audio already exists, just play it
-        if (paper.audioUrl) {
+        // If audio already exists and it's NOT a deep requested analysis
+        if (paper.audioUrl && !deep) {
             // No manual setIsPlaying(true) here
             return;
         }
 
         // Generate Podcast script and audio
         setIsGenerating(true);
-        setStatusMessage('AI가 논문 요약 중...'); // Initial status
+        setStatusMessage(deep ? 'OpenAI 정밀 분석 중...' : 'AI가 논문 요약 중...'); // Initial status
 
         try {
-            console.log('Starting generation for:', paper.title);
+            console.log('Starting generation for:', paper.title, deep ? '(Deep)' : '');
 
             // 1. Summarize
             console.log('Calling /api/summarize...');
             const sumRes = await fetch('/api/summarize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title: paper.title, abstract: paper.abstract })
+                body: JSON.stringify({ title: paper.title, abstract: paper.abstract, deep })
             });
 
             if (!sumRes.ok) {
@@ -438,6 +452,24 @@ export default function Home() {
                             {user ? <LogOut size={24} /> : <User size={24} />}
                         </button>
                     </div>
+                </div>
+
+                {/* Tab Switcher */}
+                <div className="flex bg-slate-100 p-1 rounded-2xl mb-4">
+                    <button
+                        onClick={() => setActiveTab('papers')}
+                        className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'papers' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                    >
+                        학술 논문
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('trials')}
+                        className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'trials' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                            }`}
+                    >
+                        임상 시험 (Global)
+                    </button>
                 </div>
 
                 <form onSubmit={handleSearch} className="mb-2">
@@ -603,15 +635,15 @@ export default function Home() {
                                         >
                                             <div className="flex justify-between items-start mb-3">
                                                 <div className="flex gap-2 flex-wrap">
-                                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : paper.id.startsWith('kampodb_') ? 'bg-amber-700' : paper.id.startsWith('jstage_') ? 'bg-violet-700' : paper.id.startsWith('semanticscholar_') ? 'bg-indigo-600' : 'bg-blue-600'}`}>
-                                                        {paper.id.startsWith('kci_') ? 'KCI' : paper.id.startsWith('kampodb_') ? 'KampoDB' : paper.id.startsWith('jstage_') ? 'J-STAGE' : paper.id.startsWith('semanticscholar_') ? 'AI-HUB' : 'PubMed'}
+                                                    <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black text-white ${paper.id.startsWith('kci_') ? 'bg-emerald-500' : paper.id.startsWith('kampodb_') ? 'bg-amber-700' : paper.id.startsWith('jstage_') ? 'bg-violet-700' : paper.id.startsWith('semanticscholar_') ? 'bg-indigo-600' : paper.id.startsWith('koreantk_') ? 'bg-stone-600' : 'bg-blue-600'}`}>
+                                                        {paper.id.startsWith('kci_') ? 'KCI' : paper.id.startsWith('kampodb_') ? 'KampoDB' : paper.id.startsWith('jstage_') ? 'J-STAGE' : paper.id.startsWith('semanticscholar_') ? 'AI-HUB' : paper.id.startsWith('koreantk_') ? 'Traditional' : 'PubMed'}
                                                     </span>
                                                     {paper.type && (
-                                                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${paper.type === 'Formula' ? 'bg-amber-100 text-amber-900' : 'bg-slate-900 text-white'}`}>
+                                                        <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider ${paper.type === 'Formula' ? 'bg-amber-100 text-amber-900' : paper.type === 'Patent' ? 'bg-orange-100 text-orange-900 border border-orange-200' : 'bg-slate-900 text-white'}`}>
                                                             {paper.type}
                                                         </span>
                                                     )}
-                                                    {paper.journal && paper.journal !== 'J-STAGE' && paper.journal !== 'Semantic Scholar' && (
+                                                    {paper.journal && paper.journal !== 'J-STAGE' && paper.journal !== 'Semantic Scholar' && paper.journal !== 'Traditional Knowledge Portal' && (
                                                         <span className="px-2 py-0.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-bold uppercase tracking-tight">
                                                             {paper.journal}
                                                         </span>
@@ -631,7 +663,7 @@ export default function Home() {
                                                 </button>
                                             </div>
 
-                                            <h3 className={`text-slate-900 leading-tight transition-all ${paper.id.startsWith('kci_') || paper.id.startsWith('kampodb_') || paper.id.startsWith('jstage_') || paper.id.startsWith('semanticscholar_') ? 'font-semibold' : 'font-bold'} ${expandedPaperId === paper.id ? 'text-2xl' : 'text-lg line-clamp-2'}`}>
+                                            <h3 className={`text-slate-900 leading-tight transition-all ${paper.id.startsWith('kci_') || paper.id.startsWith('kampodb_') || paper.id.startsWith('jstage_') || paper.id.startsWith('semanticscholar_') || paper.id.startsWith('koreantk_') ? 'font-semibold' : 'font-bold'} ${expandedPaperId === paper.id ? 'text-2xl' : 'text-lg line-clamp-2'}`}>
                                                 {paper.title}
                                             </h3>
 
@@ -773,26 +805,49 @@ export default function Home() {
                                                                 />
                                                             </div>
                                                         ) : (
-                                                            <button
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    startPodcast(paper);
-                                                                }}
-                                                                disabled={currentPaper?.id === paper.id && isGenerating}
-                                                                className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:opacity-70"
-                                                            >
-                                                                {currentPaper?.id === paper.id && isGenerating ? (
-                                                                    <>
-                                                                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                                                        {statusMessage || '분석 중...'}
-                                                                    </>
-                                                                ) : (
-                                                                    <>
-                                                                        <Play size={20} fill="currentColor" />
-                                                                        오디오 리포트 생성
-                                                                    </>
-                                                                )}
-                                                            </button>
+                                                            <div className="flex flex-col gap-3">
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        startPodcast(paper, true); // true for deep analysis
+                                                                    }}
+                                                                    disabled={currentPaper?.id === paper.id && isGenerating}
+                                                                    className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-indigo-100 transition-all active:scale-95 disabled:opacity-70"
+                                                                >
+                                                                    {currentPaper?.id === paper.id && isGenerating && statusMessage?.includes('정밀') ? (
+                                                                        <>
+                                                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                            정밀 분석 중...
+                                                                        </>
+                                                                    ) : (
+                                                                        <>
+                                                                            <Sparkles size={20} fill="currentColor" />
+                                                                            AI 정밀 분석 (OpenAI)
+                                                                        </>
+                                                                    )}
+                                                                </button>
+
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        startPodcast(paper);
+                                                                    }}
+                                                                    disabled={currentPaper?.id === paper.id && isGenerating}
+                                                                    className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:opacity-70"
+                                                                >
+                                                                    {currentPaper?.id === paper.id && isGenerating && !statusMessage?.includes('정밀') ? (
+                                                                        <>
+                                                                            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                            {statusMessage || '분석 중...'}
+                                                                        </>
+                                                                    ) : (
+                                                                        <>
+                                                                            <Play size={20} fill="currentColor" />
+                                                                            오디오 리포트 생성 (Gemini)
+                                                                        </>
+                                                                    )}
+                                                                </button>
+                                                            </div>
                                                         )}
                                                     </div>
                                                 </motion.div>

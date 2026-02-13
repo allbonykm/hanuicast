@@ -20,8 +20,8 @@ export interface Paper {
     abstract: string;
     tags: string[];
     originalUrl: string;
-    source: 'PubMed' | 'KCI' | 'KampoDB' | 'J-STAGE' | 'Semantic Scholar';
-    type?: string; // e.g. 'Case Report', 'Review', 'Clinical Trial'
+    source: 'PubMed' | 'KCI' | 'KampoDB' | 'J-STAGE' | 'Semantic Scholar' | 'KoreanTK' | 'ClinicalTrials';
+    type?: string; // e.g. 'Case Report', 'Review', 'Clinical Trial', 'Patent'
 }
 
 export type SearchMode = 'clinical' | 'evidence' | 'latest' | 'general';
@@ -42,7 +42,7 @@ const DEFAULT_OPTIONS: SearchOptions = {
 };
 
 // Helper: fetch with timeout
-async function fetchWithTimeout(url: string, timeoutMs: number = 60000): Promise<Response> {
+async function fetchWithTimeout(url: string, timeoutMs: number = 60000, options: RequestInit = {}): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => {
         controller.abort();
@@ -50,10 +50,12 @@ async function fetchWithTimeout(url: string, timeoutMs: number = 60000): Promise
 
     try {
         const response = await fetch(url, {
+            ...options,
             signal: controller.signal,
             cache: 'no-store',
             headers: {
-                'User-Agent': 'Hanuicast/1.0 (mailto:admin@hanuicast.com)'
+                'User-Agent': 'Hanuicast/1.0 (mailto:admin@hanuicast.com)',
+                ...options.headers
             }
         });
 
@@ -650,8 +652,14 @@ export async function fetchSemanticScholarPapers(
         const fields = 'title,url,abstract,venue,year,authors,citationCount';
         const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(query)}&limit=${opts.maxResults}&fields=${fields}`;
 
-        logToFile(`[Semantic Scholar] Fetching: ${url}`);
-        const res = await fetchWithTimeout(url);
+        const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY;
+        const headers: Record<string, string> = {};
+        if (apiKey) {
+            headers['x-api-key'] = apiKey;
+        }
+
+        logToFile(`[Semantic Scholar] Fetching: ${url}${apiKey ? ' (with API Key)' : ''}`);
+        const res = await fetchWithTimeout(url, 60000, { headers });
 
         if (!res.ok) {
             if (res.status === 429) {
@@ -686,6 +694,147 @@ export async function fetchSemanticScholarPapers(
 
     } catch (error: any) {
         logToFile(`[Semantic Scholar] Fatal Error: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================================
+// Korean Traditional Knowledge Portal (지식재산처)
+// ============================================================
+
+export async function fetchKoreanTKPapers(
+    query: string,
+    options: SearchOptions = {}
+): Promise<Paper[]> {
+    if (!query) return [];
+    const opts = { ...DEFAULT_OPTIONS, ...options };
+
+    // Note: The actual API endpoints for KoreanTK are varied.
+    // Based on the 'api_example.txt', we use the 'Korean Traditional Paper Info' API (지식재산처_한국전통 논문정보).
+    // API Link: https://www.data.go.kr/data/15058444/openapi.do
+    // Service Key is required.
+
+    const serviceKey = process.env.KOREAN_TK_API_KEY || '';
+    if (!serviceKey) {
+        logToFile('[KoreanTK] Missing API Key. Skipping.');
+        return [];
+    }
+
+    try {
+        // Base URL for KoreanTK Paper Search (Simplified endpoint approach)
+        // Adjusting parameters based on standard public data portal REST patterns
+        const url = `https://apis.data.go.kr/1130000/TraditionalKnowledgePortal/getPaperSearch?serviceKey=${serviceKey}&keyword=${encodeURIComponent(query)}&numOfRows=${opts.maxResults}&pageNo=1`;
+
+        logToFile(`[KoreanTK] Fetching: ${url.replace(serviceKey, 'REDACTED')}`);
+        const res = await fetchWithTimeout(url);
+
+        if (!res.ok) {
+            logToFile(`[KoreanTK] Fetch failed: ${res.statusText}`);
+            return [];
+        }
+
+        const xml = await res.text();
+        const data = xmlParser.parse(xml);
+
+        // Structure: response -> body -> items -> item[]
+        const items = data.response?.body?.items?.item;
+        if (!items) return [];
+
+        const itemList = Array.isArray(items) ? items : [items];
+
+        return itemList.map((item: any) => {
+            const getText = (val: any) => {
+                const txt = flattenText(val);
+                return txt ? txt.trim() : '';
+            };
+
+            const title = getText(item.title || item.articleTitle || 'Untitled');
+            const authors = getText(item.author || item.writer || 'Unknown Authors');
+            const journal = getText(item.journalName || item.bookTitle || 'Traditional Knowledge Portal');
+            const date = getText(item.pubDate || item.pubYear || 'Unknown Date');
+            const abstract = getText(item.abstract || item.summary || 'Abstract not available.');
+            const id = getText(item.id || item.articleId || Math.random().toString(36).substring(7));
+            const url = getText(item.detailUrl || item.link || `https://www.koreantk.com/ktp/item/item_detail.jsp?id=${id}`);
+
+            return {
+                id: `koreantk_${id}`,
+                title,
+                authors,
+                journal,
+                date: String(date),
+                abstract,
+                tags: ['Traditional Knowledge'],
+                originalUrl: url,
+                source: 'KoreanTK' as const,
+                type: item.type === '특허' ? 'Patent' : 'Journal Article'
+            };
+        });
+
+    } catch (error: any) {
+        logToFile(`[KoreanTK] Fatal Error: ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================================
+// ClinicalTrials.gov API V2
+// ============================================================
+
+export async function fetchClinicalTrials(
+    query: string,
+    options: SearchOptions = {}
+): Promise<Paper[]> {
+    if (!query) return [];
+    const opts = { ...DEFAULT_OPTIONS, ...options };
+
+    try {
+        // ClinicalTrials.gov API V2 Search
+        // query.cond for medical conditions, query.term for keywords
+        const url = `https://clinicaltrials.gov/api/v2/studies?query.term=${encodeURIComponent(query)}&pageSize=${opts.maxResults}&countTotal=true&sort=LastUpdatePostDate:desc`;
+
+        logToFile(`[ClinicalTrials] Fetching: ${url}`);
+        const res = await fetchWithTimeout(url);
+
+        if (!res.ok) {
+            logToFile(`[ClinicalTrials] Fetch failed: ${res.statusText}`);
+            return [];
+        }
+
+        const data = await res.json();
+        const studies = data.studies;
+
+        if (!studies || !Array.isArray(studies)) return [];
+
+        return studies.map((study: any) => {
+            const protocol = study.protocolSection || {};
+            const ident = protocol.identificationModule || {};
+            const status = protocol.statusModule || {};
+            const description = protocol.descriptionModule || {};
+            const sponsors = protocol.sponsorCollaboratorsModule || {};
+
+            const nctId = ident.nctId || Math.random().toString(36).substring(7);
+            const title = ident.briefTitle || ident.officialTitle || 'Untitled Clinical Trial';
+            const leadSponsor = sponsors.leadSponsor?.name || 'Unknown Sponsor';
+            const overallStatus = status.overallStatus || 'Unknown Status';
+            const startDate = status.startDateStruct?.date || 'Unknown Start Date';
+            const summary = description.briefSummary || 'No summary available.';
+
+            return {
+                id: `clinicaltrials_${nctId}`,
+                title: `[임상] ${title}`,
+                authors: leadSponsor,
+                journal: `Status: ${overallStatus}`,
+                date: startDate,
+                abstract: summary,
+                tags: ['Clinical Trial', overallStatus],
+                originalUrl: `https://clinicaltrials.gov/ct2/show/${nctId}`,
+                source: 'ClinicalTrials' as const,
+                type: 'Clinical Trial'
+            };
+        });
+
+    } catch (error: any) {
+        logToFile(`[ClinicalTrials] Fatal Error: ${error.message}`);
         return [];
     }
 }

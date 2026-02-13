@@ -1,8 +1,18 @@
 import { NextResponse } from 'next/server';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { fetchPubmedPapers, fetchKciPapers, fetchKampoPapers, fetchJStagePapers, fetchSemanticScholarPapers, logToFile, Paper, SearchOptions } from '@/lib/paperSources';
+import { generateText } from '@/lib/ai';
+import {
+    fetchPubmedPapers,
+    fetchKciPapers,
+    fetchKampoPapers,
+    fetchJStagePapers,
+    fetchSemanticScholarPapers,
+    fetchKoreanTKPapers,
+    fetchClinicalTrials, // Added
+    logToFile,
+    Paper,
+    SearchOptions
+} from '@/lib/paperSources';
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
@@ -13,6 +23,7 @@ export async function GET(req: Request) {
 
     const fullTextOnly = searchParams.get('fullTextOnly') === 'true';
     const category = searchParams.get('category') || '';
+    const sourceType = searchParams.get('sourceType') || 'papers'; // 'papers' or 'trials'
 
     if (!query) {
         return NextResponse.json({ papers: [] });
@@ -30,13 +41,12 @@ export async function GET(req: Request) {
     let englishQuery = query;
     let japaneseQuery = query;
     let chineseQuery = query;
+    let trialsQuery = query; // Default to original query
     let recommendedKampoIds: string[] = [];
 
     // Always run through Gemini if it's Korean OR if a category is selected
     if (/[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(query) || category) {
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
             const categoryPrompts: Record<string, string> = {
                 'obgyn': 'Focus on Obstetrics, Gynecology, Infertility, PCOS, Pregnancy, Endometriosis.',
                 'kmd': 'Focus on Traditional Korean Medicine, Acupuncture, Herbal Medicine.',
@@ -48,29 +58,33 @@ export async function GET(req: Request) {
 
             const context = categoryPrompts[category as string] || '';
             const prompt = `
-            You are an expert medical research assistant specializing in global medical research (PubMed), Traditional Korean Medicine (KCI), and East Asian Medicine (KampoDB, J-STAGE, CNKI).
+            You are an expert medical research assistant specializing in global medical research(PubMed), Traditional Korean Medicine(KCI), and East Asian Medicine(KampoDB, J - STAGE, CNKI).
             User Query: "${query}"
             Context: ${context}
             
             Task:
             1. Translate the query to English medical terms if needed.
             2. Expand the PubMed query with highly relevant MeSH Terms.
-            3. Recommend up to 3 relevant Kampo Formula IDs (e.g., KT, GRS, ACS) from the KampoDB system.
-            4. Translate the query to Japanese scholarly/medical terms for J-STAGE.
-            5. Translate the query to Chinese simplified (간체) medical terms for Chinese literature search, using professional CBM (Chinese Biomedical Literature) indexing conventions if possible.
+            3. Recommend up to 3 relevant Kampo Formula IDs(e.g., KT, GRS, ACS) from the KampoDB system.
+            4. Translate the query to Japanese scholarly / medical terms for J - STAGE.
+            5. Translate the query to Chinese simplified(간체) medical terms for Chinese literature search.
+            6. Provide a simplified English search string (no MeSH tags) optimized for ClinicalTrials.gov.
             
             Output MUST be in JSON format:
             {
-                "pubmedQuery": "valid pubmed search string",
+                "pubmedQuery": "valid pubmed search string with MeSH tags",
+                "trialsQuery": "simplified English keywords for ClinicalTrials.gov",
                 "kampoIds": ["ID1", "ID2", ...],
                 "japaneseQuery": "Japanese search string",
-                "chineseQuery": "Simplified Chinese search string"
+                "chineseQuery": "Simplified Chinese search string",
+                "koreanTKQuery": "Traditional Korean Medical terms in Korean/Hanja"
             }
             `;
 
-            const result = await model.generateContent(prompt);
-            const responseText = result.response.text().trim();
-            // Robust JSON extraction: look for { ... } block
+            // Perform expansion
+            const result = await generateText(prompt, { model: 'gemini' });
+            const responseText = result.text.trim();
+
             const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             const jsonStr = jsonMatch ? jsonMatch[0] : responseText;
 
@@ -83,37 +97,55 @@ export async function GET(req: Request) {
             }
 
             englishQuery = aiData.pubmedQuery || query;
+            trialsQuery = aiData.trialsQuery || englishQuery.replace(/\[.*?\]/g, '');
             recommendedKampoIds = aiData.kampoIds || [];
             japaneseQuery = aiData.japaneseQuery || query;
             chineseQuery = aiData.chineseQuery || query;
 
-            console.log(`[Papers API] AI Expansion: PubMed="${englishQuery}", J-STAGE="${japaneseQuery}", Kampo=[${recommendedKampoIds}]`);
+            console.log(`[Papers API] AI Expansion: PubMed="${englishQuery.substring(0, 50)}...", Trials="${trialsQuery}"`);
         } catch (err) {
             console.error('[Papers API] AI Expansion error:', err);
         }
     }
 
-    // 2. Fetch from all sources in parallel
-    // OASIS is deferred for now.
-    const [pubmedResult, kciResult, kampoResult, jstageResult, semanticScholarResult] = await Promise.allSettled([
-        fetchPubmedPapers(englishQuery, options),
-        fetchKciPapers(query, options),
-        fetchKampoPapers(recommendedKampoIds),
-        fetchJStagePapers(japaneseQuery, options),
-        fetchSemanticScholarPapers(`${englishQuery} ${chineseQuery}`, options) // Merge English and Chinese for Semantic Scholar
-    ]);
+    // 2. Fetch from sources
+    if (sourceType === 'trials') {
+        try {
+            const finalTrialsQuery = trialsQuery || query;
+            const trials = await fetchClinicalTrials(finalTrialsQuery, { maxResults: 20 });
+            return NextResponse.json({
+                papers: trials,
+                meta: {
+                    query,
+                    translatedQuery: finalTrialsQuery !== query ? finalTrialsQuery : undefined,
+                    totalCount: trials.length
+                }
+            });
+        } catch (err: any) {
+            console.error('[Papers API] ClinicalTrials fetch error:', err);
+            return NextResponse.json({ papers: [], error: err.message }, { status: 500 });
+        }
+    }
 
-    const pubmedPapers: Paper[] = (pubmedResult.status === 'fulfilled' && Array.isArray(pubmedResult.value)) ? pubmedResult.value : [];
-    const kciPapers: Paper[] = (kciResult.status === 'fulfilled' && Array.isArray(kciResult.value)) ? kciResult.value : [];
-    const kampoPapers: Paper[] = (kampoResult.status === 'fulfilled' && Array.isArray(kampoResult.value)) ? kampoResult.value : [];
-    const jstagePapers: Paper[] = (jstageResult.status === 'fulfilled' && Array.isArray(jstageResult.value)) ? jstageResult.value : [];
-    const ssPapers: Paper[] = (semanticScholarResult.status === 'fulfilled' && Array.isArray(semanticScholarResult.value)) ? semanticScholarResult.value : [];
-
-    console.log(`[Papers API] Results - PubMed: ${pubmedPapers.length}, KCI: ${kciPapers.length}, Kampo: ${kampoPapers.length}, J-STAGE: ${jstagePapers.length}, SemScholar: ${ssPapers.length}`);
-
-    // 3. Combine and sort
+    // Default: Fetch research papers in parallel
     try {
-        const others = [...pubmedPapers, ...kciPapers, ...jstagePapers, ...ssPapers].sort((a, b) => {
+        const [pubmedResult, kciResult, kampoResult, jstageResult, semanticScholarResult, koreanTKResult] = await Promise.allSettled([
+            fetchPubmedPapers(englishQuery, options),
+            fetchKciPapers(query, options),
+            fetchKampoPapers(recommendedKampoIds),
+            fetchJStagePapers(japaneseQuery, options),
+            fetchSemanticScholarPapers(`${englishQuery} ${chineseQuery}`, options),
+            fetchKoreanTKPapers(query, options)
+        ]);
+
+        const pubmedPapers: Paper[] = (pubmedResult.status === 'fulfilled' && Array.isArray(pubmedResult.value)) ? pubmedResult.value : [];
+        const kciPapers: Paper[] = (kciResult.status === 'fulfilled' && Array.isArray(kciResult.value)) ? kciResult.value : [];
+        const kampoPapers: Paper[] = (kampoResult.status === 'fulfilled' && Array.isArray(kampoResult.value)) ? kampoResult.value : [];
+        const jstagePapers: Paper[] = (jstageResult.status === 'fulfilled' && Array.isArray(jstageResult.value)) ? jstageResult.value : [];
+        const ssPapers: Paper[] = (semanticScholarResult.status === 'fulfilled' && Array.isArray(semanticScholarResult.value)) ? semanticScholarResult.value : [];
+        const tkPapers: Paper[] = (koreanTKResult.status === 'fulfilled' && Array.isArray(koreanTKResult.value)) ? koreanTKResult.value : [];
+
+        const others = [...pubmedPapers, ...kciPapers, ...jstagePapers, ...ssPapers, ...tkPapers].sort((a, b) => {
             const dateA = new Date(a.date.replace(/\//g, '-'));
             const dateB = new Date(b.date.replace(/\//g, '-'));
             return dateB.getTime() - dateA.getTime();
@@ -131,11 +163,12 @@ export async function GET(req: Request) {
                 kampoCount: kampoPapers.length,
                 jstageCount: jstagePapers.length,
                 semanticScholarCount: ssPapers.length,
+                koreanTKCount: tkPapers.length,
                 totalCount: combined.length
             }
         });
     } catch (e: any) {
-        console.error('[Papers API] Response generation failed:', e);
+        console.error('[Papers API] Parallel fetch error:', e);
         return NextResponse.json({ error: e.message }, { status: 500 });
     }
 }
