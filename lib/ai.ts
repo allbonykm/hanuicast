@@ -40,7 +40,9 @@ export async function generateText(
             };
         } catch (error: any) {
             console.error('[AI] OpenAI Error:', error.message);
-            throw error;
+            console.warn('[AI] Falling back to Gemini...');
+            // Fallback to Gemini if OpenAI fails
+            return generateText(prompt, { ...options, model: 'gemini' });
         }
     } else {
         // Default to Gemini

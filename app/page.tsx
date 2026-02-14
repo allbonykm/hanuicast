@@ -47,7 +47,7 @@ export default function Home() {
     const [savedPapers, setSavedPapers] = useState<Paper[]>([]);
     const [audioProgress, setAudioProgress] = useState({ currentTime: 0, duration: 0 });
     const [fullTextOnly, setFullTextOnly] = useState(false);
-    const [selectedCategory, setSelectedCategory] = useState('obgyn'); // Default to Obs/Gyn as requested
+    const [selectedCategory, setSelectedCategory] = useState(''); // Default to All
     const [appliedQuery, setAppliedQuery] = useState('');
     const [showHelp, setShowHelp] = useState(false);
     const [activeTab, setActiveTab] = useState<'papers' | 'trials'>('papers');
