@@ -1,0 +1,15 @@
+{
+    "name": "morning article",
+    "short_name": "Morning Article",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#ffffff",
+    "icons": [
+        {
+            "src": "/logoimage.png",
+            "sizes": "60x60",
+            "type": "image/png"
+        }
+    ]
+}

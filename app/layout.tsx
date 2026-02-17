@@ -17,8 +17,15 @@ const spaceGrotesk = Space_Grotesk({
 export const metadata: Metadata = {
     title: "Morning Article - Medical Insight Assistant",
     description: "AI-powered medical research briefing for healthcare professionals",
+    manifest: "/manifest.json",
+    appleWebApp: {
+        capable: true,
+        statusBarStyle: "default",
+        title: "Morning Article",
+    },
     icons: {
         icon: "/favicon.svg",
+        apple: "/logoimage.png",
     },
 };
 

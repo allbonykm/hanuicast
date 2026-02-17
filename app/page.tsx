@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut, Sparkles } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut, Sparkles, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 import AuthModal from './components/AuthModal';
+import ScriptModal from './components/script-player/ScriptModal';
 
 interface Paper {
     id: string;
@@ -51,6 +52,7 @@ export default function Home() {
     const [appliedQuery, setAppliedQuery] = useState('');
     const [showHelp, setShowHelp] = useState(false);
     const [activeTab, setActiveTab] = useState<'papers' | 'trials'>('papers');
+    const [isScriptModalOpen, setIsScriptModalOpen] = useState(false);
 
     const CATEGORIES = [
         { id: '', label: '전체' },
@@ -745,6 +747,17 @@ export default function Home() {
                                                                     >
                                                                         <SkipForward fill="currentColor" size={24} />
                                                                     </button>
+
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            setIsScriptModalOpen(true);
+                                                                        }}
+                                                                        className="text-slate-400 hover:text-white transition-colors"
+                                                                        title="대본 보기"
+                                                                    >
+                                                                        <FileText size={24} />
+                                                                    </button>
                                                                 </div>
 
                                                                 <div
@@ -937,6 +950,16 @@ export default function Home() {
                     </motion.div>
                 )}
             </AnimatePresence>
-        </div >
+
+            <ScriptModal
+                isOpen={isScriptModalOpen}
+                onClose={() => setIsScriptModalOpen(false)}
+                script={currentPaper ? {
+                    id: currentPaper.id,
+                    title: currentPaper.title,
+                    content: currentPaper.summaryScript || '대본이 없습니다.'
+                } : null}
+            />
+        </div>
     );
 }
