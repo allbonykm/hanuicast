@@ -367,7 +367,7 @@ export default function Home() {
             console.log('Summary received:', script?.substring(0, 50) + '...');
 
             // 2. TTS & Save
-            setStatusMessage('오디오 클립 생성 중...'); // Update status
+            setStatusMessage(deep ? 'OpenAI 오디오 클립 생성 중...' : '오디오 클립 생성 중...'); // Update status
             console.log('Calling /api/tts...');
 
             const ttsRes = await fetch('/api/tts', {
@@ -827,7 +827,7 @@ export default function Home() {
                                                                     disabled={currentPaper?.id === paper.id && isGenerating}
                                                                     className="w-full h-14 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-indigo-100 transition-all active:scale-95 disabled:opacity-70"
                                                                 >
-                                                                    {currentPaper?.id === paper.id && isGenerating && statusMessage?.includes('정밀') ? (
+                                                                    {currentPaper?.id === paper.id && isGenerating && statusMessage?.includes('OpenAI') ? (
                                                                         <>
                                                                             <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                                                                             정밀 분석 중...
@@ -848,7 +848,7 @@ export default function Home() {
                                                                     disabled={currentPaper?.id === paper.id && isGenerating}
                                                                     className="w-full h-14 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl flex items-center justify-center gap-3 font-bold text-lg shadow-lg shadow-blue-100 transition-all active:scale-95 disabled:opacity-70"
                                                                 >
-                                                                    {currentPaper?.id === paper.id && isGenerating && !statusMessage?.includes('정밀') ? (
+                                                                    {currentPaper?.id === paper.id && isGenerating && !statusMessage?.includes('OpenAI') ? (
                                                                         <>
                                                                             <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                                                                             {statusMessage || '분석 중...'}

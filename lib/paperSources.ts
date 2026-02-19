@@ -595,7 +595,24 @@ export async function fetchJStagePapers(
             const title = titleEn || titleJa || getText(entry.title) || 'Untitled';
 
             const entryId = getText(entry.id) || getText(entry.link?.['@_href']) || getText(entry.article_link?.en);
-            const shortId = entryId.split('/').filter(Boolean).pop() || Math.random().toString(36).substring(7);
+
+            // Fix: Use a more specific part of the URL to ensure uniqueness.
+            // J-Stage URLs usually look like: .../article/journal/vol/issue/article-id/_article/-char/ja/
+            const parts = entryId.split('/').filter(Boolean);
+            const articleIdx = parts.indexOf('article');
+            let shortId = '';
+
+            if (articleIdx !== -1 && parts.length > articleIdx + 1) {
+                // Take parts after 'article' and join them, excluding generic suffixes
+                shortId = parts.slice(articleIdx + 1)
+                    .filter(p => !['_article', '-char', 'ja', 'en'].includes(p))
+                    .join('_');
+            }
+
+            if (!shortId) {
+                // Fallback to the last part or a random string if the pattern doesn't match
+                shortId = parts[parts.length - 1] || Math.random().toString(36).substring(7);
+            }
 
             if (title === 'Untitled') {
                 logToFile(`[J-STAGE] Warning: Could not find title for entry. Raw keys: ${Object.keys(entry).join(',')}`);
