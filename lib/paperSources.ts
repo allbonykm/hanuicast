@@ -379,16 +379,18 @@ export async function fetchKciPapers(
         const data = xmlParser.parse(xmlText);
 
         // KCI XML structure: <MetaData> <outputData> <record> ...
+        logToFile(`[KCI] Response keys: ${Object.keys(data).join(',')}`);
         let records = data?.MetaData?.outputData?.record || data?.result?.outputData?.record;
 
         if (!records) {
-            logToFile(`[KCI] No records found in response`);
+            logToFile(`[KCI] No records found in response. Root keys: ${Object.keys(data).join(',')}`);
             return [];
         }
 
         const recordList = Array.isArray(records) ? records : [records];
+        logToFile(`[KCI] Found ${recordList.length} records in XML`);
 
-        return recordList.map((record: any) => {
+        const results: Paper[] = recordList.map((record: any) => {
             const articleInfo = record.articleInfo || {};
             const journalInfo = record.journalInfo || {};
 
@@ -443,6 +445,9 @@ export async function fetchKciPapers(
                 type
             };
         });
+
+        logToFile(`[KCI] Returning ${results.length} papers.`);
+        return results;
 
     } catch (error: any) {
         logToFile(`[KCI] Fatal Error: ${error.message}\n${error.stack}`);
@@ -520,11 +525,15 @@ async function fetchKampoFormulaDetails(id: string): Promise<Paper | null> {
         if (!infoRes.ok) return null;
 
         const info = await infoRes.json();
+        if (!info || !info.name) {
+            logToFile(`[KampoDB] Warning: Invalid info data for ${id}`);
+            return null;
+        }
         const crudes = crudeRes.ok ? await crudeRes.json() : [];
         const diseases = diseaseRes.ok ? await diseaseRes.json() : [];
 
         // Build Title
-        const title = `[한방] ${info.name} (${info.name_jp})`;
+        const title = `[한방] ${info.name}${info.name_jp ? ` (${info.name_jp})` : ''}`;
 
         // Build Abstract (Crudes + Top Diseases)
         const crudeList = Array.isArray(crudes) ? crudes.map((c: any) => c.name).join(', ') : '';
@@ -580,19 +589,25 @@ export async function fetchJStagePapers(
         const data = xmlParser.parse(xmlText);
 
         const entries = data?.feed?.entry;
-        if (!entries) return [];
+        if (!entries) {
+            logToFile(`[J-STAGE] No entries found. Feed keys: ${data?.feed ? Object.keys(data.feed).join(',') : 'N/A'}`);
+            return [];
+        }
 
         const entryList = Array.isArray(entries) ? entries : [entries];
 
-        return entryList.map((entry: any) => {
+        const results: Paper[] = entryList.map((entry: any) => {
             const getText = (val: any) => {
                 const txt = flattenText(val);
                 return txt.trim();
             };
 
-            const titleEn = getText(entry.article_title?.en || entry.article_title || entry.title);
+            const titleEn = getText(entry.article_title?.en || entry.article_title || entry['prism:title'] || entry['dc:title'] || entry.title);
             const titleJa = getText(entry.article_title?.ja);
-            const title = titleEn || titleJa || getText(entry.title) || 'Untitled';
+            const title = titleEn || titleJa || getText(entry.title) || getText(entry['atom:title']) || 'Untitled';
+
+            // J-Stage response can have multiple title fields depending on the item type (service 3)
+            // If still untitled, try to log what's available
 
             const entryId = getText(entry.id) || getText(entry.link?.['@_href']) || getText(entry.article_link?.en);
 
@@ -615,7 +630,7 @@ export async function fetchJStagePapers(
             }
 
             if (title === 'Untitled') {
-                logToFile(`[J-STAGE] Warning: Could not find title for entry. Raw keys: ${Object.keys(entry).join(',')}`);
+                logToFile(`[J-STAGE] Warning: Could not find title for entry. Raw keys: ${Object.keys(entry).join(',')}. Entry content: ${JSON.stringify(entry).substring(0, 200)}`);
             }
 
             let authors = 'Unknown Authors';
@@ -645,7 +660,10 @@ export async function fetchJStagePapers(
                 source: 'J-STAGE' as const,
                 type: 'Journal Article'
             };
-        });
+        }).filter(p => p.title !== 'Untitled' && p.id !== 'jstage_');
+
+        logToFile(`[J-STAGE] Returning ${results.length} valid papers (out of ${entryList.length} entries).`);
+        return results;
 
     } catch (error: any) {
         logToFile(`[J-STAGE] Fatal Error: ${error.message}`);
