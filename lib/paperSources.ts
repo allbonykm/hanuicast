@@ -873,3 +873,71 @@ export async function fetchClinicalTrials(
         return [];
     }
 }
+
+// ============================================================
+// Related Papers (Recommendations / Citations / References)
+// ============================================================
+
+export async function fetchRelatedPapers(
+    paperId: string,
+    source: string
+): Promise<Paper[]> {
+    if (!paperId) return [];
+
+    try {
+        logToFile(`[Related] Fetching related for ID: ${paperId}, Source: ${source}`);
+
+        // Clean up ID (remove prefix if added by us)
+        let cleanId = paperId;
+        if (paperId.includes('_')) {
+            cleanId = paperId.split('_')[1];
+        }
+
+        let url = "";
+        // If it's a PubMed ID or source is PubMed, use Semantic Scholar's PMID support
+        if (source === 'PubMed' || paperId.startsWith('pubmed_')) {
+            url = `https://api.semanticscholar.org/graph/v1/paper/PMID:${cleanId}/recommendations?fields=title,url,abstract,venue,year,authors&limit=5`;
+        } else if (paperId.startsWith('semanticscholar_')) {
+            url = `https://api.semanticscholar.org/graph/v1/paper/${cleanId}/recommendations?fields=title,url,abstract,venue,year,authors&limit=5`;
+        } else {
+            logToFile(`[Related] Source ${source} not directly supported for recommendations yet.`);
+            return [];
+        }
+
+        const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY;
+        const headers: Record<string, string> = {};
+        if (apiKey) {
+            headers['x-api-key'] = apiKey;
+        }
+
+        const res = await fetchWithTimeout(url, 30000, { headers });
+        if (!res.ok) {
+            logToFile(`[Related] Fetch failed: ${res.status} ${res.statusText}`);
+            return [];
+        }
+
+        const data = await res.json();
+        const recommended = data.recommendedPapers || [];
+
+        return recommended.map((p: any) => {
+            const authors = p.authors?.map((a: any) => a.name).join(', ') || 'Unknown Authors';
+
+            return {
+                id: `semanticscholar_${p.paperId}`,
+                title: p.title || 'Untitled',
+                authors: authors,
+                journal: p.venue || 'Semantic Scholar',
+                date: String(p.year || 'Unknown Date'),
+                abstract: p.abstract || '[AI Search Result] Abstract not available.',
+                tags: ['Related'],
+                originalUrl: p.url || `https://www.semanticscholar.org/paper/${p.paperId}`,
+                source: 'Semantic Scholar' as const,
+                type: 'Related Article'
+            };
+        });
+
+    } catch (error: any) {
+        logToFile(`[Related] Fatal Error: ${error.message}`);
+        return [];
+    }
+}

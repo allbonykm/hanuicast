@@ -27,3 +27,19 @@ create policy "Users can insert their own preferences"
 create policy "Users can update their own preferences"
   on public.user_preferences for update
   using ( auth.uid() = user_id );
+
+-- 4. Create the papers table
+-- This table stores processed papers and cached metadata.
+create table if not exists public.papers (
+  id bigserial primary key,
+  title text not null,
+  journal text,
+  authors text,
+  abstract text,
+  summary_script text,
+  audio_url text,
+  tags text[],
+  original_url text unique,
+  related_cache jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now())
+);

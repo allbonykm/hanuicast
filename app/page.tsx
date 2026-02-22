@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut, Sparkles, FileText } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Heart, Search, BookOpen, Clock, Music, X, ChevronUp, Check, HelpCircle, User, LogOut, Sparkles, FileText, Layers, ChevronRight, ArrowLeft } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
 import AuthModal from './components/AuthModal';
@@ -53,6 +53,9 @@ export default function Home() {
     const [showHelp, setShowHelp] = useState(false);
     const [activeTab, setActiveTab] = useState<'papers' | 'trials'>('papers');
     const [isScriptModalOpen, setIsScriptModalOpen] = useState(false);
+    const [breadcrumbs, setBreadcrumbs] = useState<Paper[]>([]);
+    const [relatedPapersData, setRelatedPapersData] = useState<Record<string, Paper[]>>({});
+    const [loadingRelatedId, setLoadingRelatedId] = useState<string | null>(null);
 
     const CATEGORIES = [
         { id: '', label: '전체' },
@@ -322,6 +325,43 @@ export default function Home() {
     };
 
     const [statusMessage, setStatusMessage] = useState('');
+
+    const fetchRelated = async (paper: Paper) => {
+        if (relatedPapersData[paper.id]) return;
+        setLoadingRelatedId(paper.id);
+        try {
+            // @ts-ignore
+            const res = await fetch(`/api/papers/related?id=${paper.id}&source=${paper.source || ''}`);
+            const data = await res.json();
+            if (data.papers) {
+                setRelatedPapersData(prev => ({ ...prev, [paper.id]: data.papers }));
+            }
+        } catch (err) {
+            console.error('Failed to fetch related papers:', err);
+        } finally {
+            setLoadingRelatedId(null);
+        }
+    };
+
+    const enterDeepDive = (paper: Paper) => {
+        setBreadcrumbs(prev => [...prev, paper]);
+        setExpandedPaperId(paper.id);
+        fetchRelated(paper);
+        // Scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    const navigateBreadcrumb = (index: number) => {
+        if (index === -1) {
+            setBreadcrumbs([]);
+            return;
+        }
+        const newBreadcrumbs = breadcrumbs.slice(0, index + 1);
+        setBreadcrumbs(newBreadcrumbs);
+        const targetPaper = newBreadcrumbs[newBreadcrumbs.length - 1];
+        setExpandedPaperId(targetPaper.id);
+        fetchRelated(targetPaper);
+    };
 
     const startPodcast = async (paper: Paper, deep = false) => {
         if (currentPaper?.id === paper.id && !deep) {
@@ -604,6 +644,36 @@ export default function Home() {
 
             {/* Main Content */}
             <main className="flex-1 overflow-y-auto p-6 space-y-8 no-scrollbar">
+                {/* Breadcrumbs */}
+                <AnimatePresence>
+                    {breadcrumbs.length > 0 && (
+                        <motion.div
+                            initial={{ opacity: 0, y: -10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -10 }}
+                            className="flex items-center flex-wrap gap-2 text-[11px] font-bold text-slate-400 bg-slate-100/50 p-3 rounded-2xl border border-slate-200"
+                        >
+                            <button
+                                onClick={() => navigateBreadcrumb(-1)}
+                                className="hover:text-blue-600 transition-colors flex items-center gap-1"
+                            >
+                                <ArrowLeft size={14} />
+                                전체 결과
+                            </button>
+                            {breadcrumbs.map((b, idx) => (
+                                <React.Fragment key={`${b.id}_bc`}>
+                                    <ChevronRight size={12} className="text-slate-300" />
+                                    <button
+                                        onClick={() => navigateBreadcrumb(idx)}
+                                        className={`hover:text-blue-600 transition-colors max-w-[120px] truncate ${idx === breadcrumbs.length - 1 ? 'text-blue-600' : ''}`}
+                                    >
+                                        {b.title}
+                                    </button>
+                                </React.Fragment>
+                            ))}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
                 {/* Featured Section */}
                 <section>
                     <div className="flex items-center justify-between mb-4">
@@ -621,8 +691,8 @@ export default function Home() {
                             [1, 2].map(i => (
                                 <div key={i} className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 animate-pulse h-48"></div>
                             ))
-                        ) : papers.length > 0 ? (
-                            papers.map((paper: Paper) => {
+                        ) : (breadcrumbs.length > 0 ? [breadcrumbs[breadcrumbs.length - 1]] : papers).length > 0 ? (
+                            (breadcrumbs.length > 0 ? [breadcrumbs[breadcrumbs.length - 1]] : papers).map((paper: Paper) => {
                                 const isSaved = savedPapers.some(p => p.id === paper.id);
                                 return (
                                     <motion.div
@@ -781,15 +851,72 @@ export default function Home() {
                                                                     <span>{formatTime(audioProgress.duration)}</span>
                                                                 </div>
 
-                                                                <a
-                                                                    href={paper.originalUrl}
-                                                                    target="_blank"
-                                                                    rel="noopener noreferrer"
-                                                                    onClick={(e) => e.stopPropagation()}
-                                                                    className="block text-center text-xs text-blue-400 hover:text-blue-300 font-medium mt-3"
-                                                                >
-                                                                    원문 보기 →
-                                                                </a>
+                                                                <div className="flex items-center gap-4 mt-3">
+                                                                    <a
+                                                                        href={paper.originalUrl}
+                                                                        target="_blank"
+                                                                        rel="noopener noreferrer"
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="text-xs text-blue-400 hover:text-blue-300 font-medium"
+                                                                    >
+                                                                        원문 보기 →
+                                                                    </a>
+
+                                                                    {/* Related Papers Button */}
+                                                                    <button
+                                                                        onClick={(e) => {
+                                                                            e.stopPropagation();
+                                                                            fetchRelated(paper);
+                                                                        }}
+                                                                        className={`p-2 rounded-xl transition-all flex items-center gap-1.5 ${relatedPapersData[paper.id] ? 'bg-blue-600 text-white shadow-lg shadow-blue-200' : 'bg-slate-800 text-slate-400 hover:text-blue-400 hover:bg-slate-700'}`}
+                                                                        title="관련 논문 탐색"
+                                                                    >
+                                                                        {loadingRelatedId === paper.id ? (
+                                                                            <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                                                        ) : (
+                                                                            <Layers size={14} />
+                                                                        )}
+                                                                        <span className="text-[10px] font-bold uppercase tracking-wider">Related</span>
+                                                                    </button>
+                                                                </div>
+
+                                                                {/* Related Papers List (Nested) */}
+                                                                <AnimatePresence>
+                                                                    {relatedPapersData[paper.id] && (
+                                                                        <motion.div
+                                                                            initial={{ opacity: 0, height: 0 }}
+                                                                            animate={{ opacity: 1, height: 'auto' }}
+                                                                            className="mt-6 pt-6 border-t border-slate-700/50"
+                                                                        >
+                                                                            <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                                                                <Sparkles size={12} className="text-blue-400" />
+                                                                                관련 추천 논문 (Top 5)
+                                                                            </h4>
+                                                                            <div className="space-y-3">
+                                                                                {relatedPapersData[paper.id].map((rp) => (
+                                                                                    <div
+                                                                                        key={rp.id}
+                                                                                        onClick={(e) => {
+                                                                                            e.stopPropagation();
+                                                                                            enterDeepDive(rp);
+                                                                                        }}
+                                                                                        className="bg-slate-800/50 hover:bg-slate-800 p-3 rounded-2xl border border-slate-700/50 transition-all cursor-pointer group"
+                                                                                    >
+                                                                                        <h5 className="text-xs font-bold text-slate-200 line-clamp-2 group-hover:text-blue-400 transition-colors mb-1">
+                                                                                            {rp.title}
+                                                                                        </h5>
+                                                                                        <p className="text-[10px] text-slate-500 font-medium truncate">
+                                                                                            {rp.authors} • {rp.date}
+                                                                                        </p>
+                                                                                    </div>
+                                                                                ))}
+                                                                                {relatedPapersData[paper.id].length === 0 && (
+                                                                                    <p className="text-[10px] text-slate-600 italic py-2">관련 논문을 찾을 수 없습니다.</p>
+                                                                                )}
+                                                                            </div>
+                                                                        </motion.div>
+                                                                    )}
+                                                                </AnimatePresence>
 
                                                                 <audio
                                                                     ref={audioRef}
