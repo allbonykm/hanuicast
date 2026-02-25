@@ -896,9 +896,9 @@ export async function fetchRelatedPapers(
         let url = "";
         // If it's a PubMed ID or source is PubMed, use Semantic Scholar's PMID support
         if (source === 'PubMed' || paperId.startsWith('pubmed_')) {
-            url = `https://api.semanticscholar.org/graph/v1/paper/PMID:${cleanId}/recommendations?fields=title,url,abstract,venue,year,authors&limit=5`;
+            url = `https://api.semanticscholar.org/recommendations/v1/papers/forpaper/PMID:${cleanId}?fields=title,url,abstract,venue,year,authors&limit=5`;
         } else if (paperId.startsWith('semanticscholar_')) {
-            url = `https://api.semanticscholar.org/graph/v1/paper/${cleanId}/recommendations?fields=title,url,abstract,venue,year,authors&limit=5`;
+            url = `https://api.semanticscholar.org/recommendations/v1/papers/forpaper/${cleanId}?fields=title,url,abstract,venue,year,authors&limit=5`;
         } else {
             logToFile(`[Related] Source ${source} not directly supported for recommendations yet.`);
             return [];
