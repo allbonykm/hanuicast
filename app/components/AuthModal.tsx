@@ -19,6 +19,25 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
+    // 동적 리다이렉트 URL 생성 함수
+    const getRedirectUrl = () => {
+        let url =
+            process?.env?.NEXT_PUBLIC_SITE_URL ?? // Vercel 등 배포 환경에서 설정한 사이트 URL
+            process?.env?.NEXT_PUBLIC_VERCEL_URL ?? // 자동 할당된 Vercel URL
+            'http://localhost:3005'; // 로컬 폴백 포트 (추정)
+
+        // 프로토콜(http/https) 포함 로직 추가
+        if (typeof window !== 'undefined') {
+            url = window.location.origin; // 클라이언트 사이드에서는 현재 창의 origin을 최우선으로 사용
+        } else {
+            url = url.includes('http') ? url : `https://${url}`;
+        }
+
+        // 뒤에 슬래시가 있다면 제거 후 경로 추가
+        url = url.endsWith('/') ? url.slice(0, -1) : url;
+        return `${url}/update-password`;
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
@@ -26,8 +45,9 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
 
         try {
             if (isResetPassword) {
+                const redirectUrl = getRedirectUrl();
                 const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: `${window.location.origin}/update-password`,
+                    redirectTo: redirectUrl,
                 });
                 if (error) throw error;
                 setMessage({ text: '비밀번호 재설정 링크가 이메일로 전송되었습니다. 이메일을 확인해주세요.', type: 'success' });
