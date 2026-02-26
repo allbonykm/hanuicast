@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { X, Mail, Lock, User, LogIn, UserPlus, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { X, Mail, Lock, User, LogIn, UserPlus, AlertCircle, CheckCircle2, KeyRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface AuthModalProps {
@@ -13,6 +13,7 @@ interface AuthModalProps {
 
 export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
     const [isLogin, setIsLogin] = useState(true);
+    const [isResetPassword, setIsResetPassword] = useState(false);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -24,7 +25,13 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
         setMessage(null);
 
         try {
-            if (isLogin) {
+            if (isResetPassword) {
+                const { error } = await supabase.auth.resetPasswordForEmail(email, {
+                    redirectTo: `${window.location.origin}/update-password`,
+                });
+                if (error) throw error;
+                setMessage({ text: '비밀번호 재설정 링크가 이메일로 전송되었습니다. 이메일을 확인해주세요.', type: 'success' });
+            } else if (isLogin) {
                 const { error } = await supabase.auth.signInWithPassword({
                     email,
                     password,
@@ -52,6 +59,12 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
         } finally {
             setLoading(false);
         }
+    };
+
+    const toggleMode = () => {
+        setIsResetPassword(false);
+        setIsLogin(!isLogin);
+        setMessage(null);
     };
 
     return (
@@ -84,13 +97,15 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                             <div className="p-8">
                                 <div className="text-center mb-8">
                                     <div className="w-16 h-16 bg-blue-50 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600">
-                                        <User size={32} />
+                                        {isResetPassword ? <KeyRound size={32} /> : <User size={32} />}
                                     </div>
                                     <h2 className="text-2xl font-black text-slate-800">
-                                        {isLogin ? '원장님 로그인' : '새 계정 만들기'}
+                                        {isResetPassword ? '비밀번호 재설정' : (isLogin ? '원장님 로그인' : '새 계정 만들기')}
                                     </h2>
                                     <p className="text-slate-500 text-sm mt-1 font-medium">
-                                        {isLogin ? '개인화된 논문 큐레이션을 확인하세요.' : '나만의 논문 보관함을 만들어보세요.'}
+                                        {isResetPassword
+                                            ? '가입하신 이메일 주소를 입력하시면 재설정 링크를 보내드립니다.'
+                                            : (isLogin ? '개인화된 논문 큐레이션을 확인하세요.' : '나만의 논문 보관함을 만들어보세요.')}
                                     </p>
                                 </div>
 
@@ -110,21 +125,23 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                                         </div>
                                     </div>
 
-                                    <div className="space-y-1">
-                                        <label className="text-xs font-bold text-slate-500 ml-1 uppercase">Password</label>
-                                        <div className="relative">
-                                            <input
-                                                type="password"
-                                                value={password}
-                                                onChange={(e) => setPassword(e.target.value)}
-                                                className="w-full bg-slate-50 border-2 border-slate-100 focus:border-blue-500 focus:bg-white rounded-xl py-3 pl-10 pr-4 outline-none transition-all font-medium text-slate-800"
-                                                placeholder="••••••••"
-                                                minLength={6}
-                                                required
-                                            />
-                                            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                    {!isResetPassword && (
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-bold text-slate-500 ml-1 uppercase">Password</label>
+                                            <div className="relative">
+                                                <input
+                                                    type="password"
+                                                    value={password}
+                                                    onChange={(e) => setPassword(e.target.value)}
+                                                    className="w-full bg-slate-50 border-2 border-slate-100 focus:border-blue-500 focus:bg-white rounded-xl py-3 pl-10 pr-4 outline-none transition-all font-medium text-slate-800"
+                                                    placeholder="••••••••"
+                                                    minLength={6}
+                                                    required
+                                                />
+                                                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
 
                                     <AnimatePresence>
                                         {message && (
@@ -132,11 +149,13 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                                                 initial={{ height: 0, opacity: 0 }}
                                                 animate={{ height: 'auto', opacity: 1 }}
                                                 exit={{ height: 0, opacity: 0 }}
-                                                className={`flex items-center gap-2 text-sm font-bold p-3 rounded-xl ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
+                                                className={`flex items-start gap-2 text-sm font-bold p-3 rounded-xl ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
                                                     }`}
                                             >
-                                                {message.type === 'error' ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
-                                                {message.text}
+                                                <div className="mt-0.5">
+                                                    {message.type === 'error' ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+                                                </div>
+                                                <span className="leading-tight">{message.text}</span>
                                             </motion.div>
                                         )}
                                     </AnimatePresence>
@@ -148,6 +167,10 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                                     >
                                         {loading ? (
                                             <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                        ) : isResetPassword ? (
+                                            <>
+                                                <Mail size={20} /> 재설정 링크 받기
+                                            </>
                                         ) : isLogin ? (
                                             <>
                                                 <LogIn size={20} /> 로그인
@@ -160,15 +183,24 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                                     </button>
                                 </form>
 
-                                <div className="mt-6 text-center">
+                                <div className="mt-6 flex flex-col items-center gap-3">
+                                    {isLogin && !isResetPassword && (
+                                        <button
+                                            onClick={() => {
+                                                setIsResetPassword(true);
+                                                setMessage(null);
+                                            }}
+                                            className="text-sm text-slate-500 hover:text-blue-600 font-bold transition-colors"
+                                        >
+                                            비밀번호를 잊으셨나요?
+                                        </button>
+                                    )}
+
                                     <button
-                                        onClick={() => {
-                                            setIsLogin(!isLogin);
-                                            setMessage(null);
-                                        }}
+                                        onClick={toggleMode}
                                         className="text-sm text-slate-500 hover:text-blue-600 font-bold transition-colors"
                                     >
-                                        {isLogin ? '계정이 없으신가요? 회원가입' : '이미 계정이 있으신가요? 로그인'}
+                                        {isResetPassword ? '로그인 화면으로 돌아가기' : (isLogin ? '계정이 없으신가요? 회원가입' : '이미 계정이 있으신가요? 로그인')}
                                     </button>
                                 </div>
                             </div>

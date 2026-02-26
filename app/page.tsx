@@ -331,7 +331,7 @@ export default function Home() {
         setLoadingRelatedId(paper.id);
         try {
             // @ts-ignore
-            const res = await fetch(`/api/papers/related?id=${paper.id}&source=${paper.source || ''}`);
+            const res = await fetch(`/api/papers/related?id=${paper.id}&source=${paper.source || ''}&title=${encodeURIComponent(paper.title || '')}`);
             const data = await res.json();
             if (data.papers) {
                 setRelatedPapersData(prev => ({ ...prev, [paper.id]: data.papers }));
@@ -364,12 +364,17 @@ export default function Home() {
     };
 
     const startPodcast = async (paper: Paper, deep = false) => {
+        // iOS Audio Unlock Trick: Trigger play synchronously in the click handler
+        if (audioRef.current) {
+            audioRef.current.play().catch(e => console.log('Audio unlock check:', e));
+        }
+
         if (currentPaper?.id === paper.id && !deep) {
             if (isPlaying) {
                 audioRef.current?.pause();
                 setIsPlaying(false);
             } else if (currentPaper.audioUrl) {
-                audioRef.current?.play();
+                audioRef.current?.play().catch(e => console.error("Play error:", e));
                 setIsPlaying(true);
             }
             return;
@@ -381,6 +386,11 @@ export default function Home() {
         // If audio already exists and it's NOT a deep requested analysis
         if (paper.audioUrl && !deep) {
             // No manual setIsPlaying(true) here
+            setTimeout(() => {
+                if (audioRef.current) {
+                    audioRef.current.play().catch(e => console.error("Play error:", e));
+                }
+            }, 50);
             return;
         }
 
@@ -432,12 +442,19 @@ export default function Home() {
             const { audioUrl } = await ttsRes.json();
             console.log('Audio URL received:', audioUrl);
 
+            // Add timestamp to bypass iOS Safari caching
+            const urlWithCacheBuster = `${audioUrl}?t=${Date.now()}`;
+
             // Update paper with audio URL
-            const updatedPaper = { ...paper, audioUrl, summaryScript: script };
+            const updatedPaper = { ...paper, audioUrl: urlWithCacheBuster, summaryScript: script };
             setCurrentPaper(updatedPaper);
             setPapers(prev => prev.map(p => p.id === paper.id ? updatedPaper : p));
-            // No manual setIsPlaying(true) here. 
-            // The <audio> element has autoPlay, and its onPlay listener will call setIsPlaying(true).
+            // Force play in case autoPlay fails
+            setTimeout(() => {
+                if (audioRef.current) {
+                    audioRef.current.play().catch(e => console.error("AutoPlay error:", e));
+                }
+            }, 100);
         } catch (err: any) {
             console.error('Podcast Generation Error:', err);
             alert(`오류 발생: ${err.message}`);

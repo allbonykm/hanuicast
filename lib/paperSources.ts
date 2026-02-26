@@ -880,7 +880,8 @@ export async function fetchClinicalTrials(
 
 export async function fetchRelatedPapers(
     paperId: string,
-    source: string
+    source: string,
+    title?: string
 ): Promise<Paper[]> {
     if (!paperId) return [];
 
@@ -900,7 +901,14 @@ export async function fetchRelatedPapers(
         } else if (paperId.startsWith('semanticscholar_')) {
             url = `https://api.semanticscholar.org/recommendations/v1/papers/forpaper/${cleanId}?fields=title,url,abstract,venue,year,authors&limit=5`;
         } else {
-            logToFile(`[Related] Source ${source} not directly supported for recommendations yet.`);
+            logToFile(`[Related] Source ${source} not directly supported by ID. Using title fallback search: ${title}`);
+            if (title) {
+                // Remove prefixes like [한방], [임상] and limit length
+                const cleanTitle = title.replace(/^\[.*?\]\s*/, '').substring(0, 100);
+                // Call fetchSemanticScholarPapers as a fallback
+                const fallbackPapers = await fetchSemanticScholarPapers(cleanTitle, { maxResults: 5 });
+                return fallbackPapers;
+            }
             return [];
         }
 
